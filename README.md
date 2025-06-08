@@ -1,5 +1,5 @@
-# free-adwords-scripts
+# Free Google Ads Scripts
 
-Free AdWords Scripts created for AutomatingAdWords.com are stored here.
+Free Google Ads Scripts created for Shabba.io (previously AutomatingAdWords.com) are stored here.
 
 Enjoy!
