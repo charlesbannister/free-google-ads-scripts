@@ -7,13 +7,16 @@ Version: 1.0.0
 */
 
 // CONFIG
-const DEBUG_MODE = false;
-const NEGATIVE_KEYWORD_LIMIT = 5000; // Max number of keywords per list
 const SPREADSHEET_URL = 'YOUR_SPREADSHEET_URL_HERE';
-// Used to track which lists have already triggered alerts. Create a new sheet (sheets.new) and paste in the URL
+// Create a new google sheet by typing "sheets.new" into the address bar
+// Used to track which lists have already triggered alerts
+
 const ALERT_EMAIL = 'YOUR_EMAIL_HERE';
 // Email to notify when lists hit the threshold
 
+
+const NEGATIVE_KEYWORD_LIMIT = 5000; // Max number of keywords per list
+const DEBUG_MODE = false;
 /**
  * Main entry point
  */
