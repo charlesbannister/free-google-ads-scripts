@@ -1,4 +1,4 @@
-# 📊 Weekly Campaign Performance Report Script
+# 📊 Weekly/Monthly Campaign Performance Report Script
 
 A comprehensive Google Ads script that generates automated weekly campaign performance reports with color-coded metrics, target tracking, and email notifications.
 
@@ -8,7 +8,7 @@ This script creates detailed performance reports comparing campaign metrics acro
 
 ### Key Features
 
-- **Multi-Period Comparison**: Compare campaign performance across multiple time periods (default: 3 periods of 4 weeks each)
+- **Multi-Period Comparison**: Compare campaign performance across multiple time periods (default: 3 periods of either weeks or months)
 - **Customizable Metrics**: Choose which metrics to track via a settings sheet
 - **Target Tracking**: Set weekly targets and get visual color-coding based on performance
 - **Automated Email Reports**: Beautiful HTML email reports sent to specified recipients
