@@ -1,2 +1,4 @@
 .vscode
 *_my_version.js
+node_modules
+tests
