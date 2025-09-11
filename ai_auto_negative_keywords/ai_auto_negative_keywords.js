@@ -1,7 +1,7 @@
 /**
  * Auto Negative Keyword Script (Admin Panel Version)
  * @author Charles Bannister (https://www.linkedin.com/in/charles-bannister/)
- * This script is available as a public GitHub script: https://gist.github.com/charlesbannister/afa9cd70d3b4a010e4fc6ef5d9ae1c3b
+ * This script is on GitHub: https://github.com/charlesbannister/free-google-ads-scripts/tree/master/ai_auto_negative_keywords
  * Google Sheet Template: https://docs.google.com/spreadsheets/d/1xwdogT2HiHV_Gx9pdY4rErhLSm7Qrooj6wbikEjf-G0/edit?gid=0#gid=0
  * Setup your rules at https://autoneg.shabba.io
  */
