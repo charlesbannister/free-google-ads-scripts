@@ -1,7 +1,7 @@
 /**
  * Auto Negative Keyword Script (Admin Panel Version)
  * @author Charles Bannister (https://www.linkedin.com/in/charles-bannister/)
- * This script is on GitHub: https://github.com/charlesbannister/free-google-ads-scripts/tree/master/ai_auto_negative_keywords
+ * This script is on GitHub: https://github.com/charlesbannister/free-google-ads-scripts/tree/master/ai_auto_negative_keywords and available as a public GitHub script: https://raw.githubusercontent.com/charlesbannister/free-google-ads-scripts/refs/heads/master/ai_auto_negative_keywords/ai_auto_negative_keywords.js
  * Google Sheet Template: https://docs.google.com/spreadsheets/d/1xwdogT2HiHV_Gx9pdY4rErhLSm7Qrooj6wbikEjf-G0/edit?gid=0#gid=0
  * Setup your rules at https://autoneg.shabba.io
  */
@@ -9,7 +9,7 @@
 // --- Configuration ---
 // <<<< PASTE SPREADSHEET URL HERE >>>>
 const SPREADSHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
-const SCRIPT_VERSION = 12;
+const SCRIPT_VERSION = 13;
 
 // <<< /START/ These should all be false >>>
 const DEBUG_MODE = false;
@@ -211,7 +211,7 @@ function runAccount() {
 
   rules.forEach(function (rule) {
     try {
-      console.log("\nProcessing rule: '" + rule.name);
+      console.log(`\nProcessing rule: '${rule.name}'`);
       processRule_(rule, spreadsheet, globalEmailRecipients);
       console.log("Finished processing rule: '" + rule.name + "'");
     } catch (e) {
@@ -368,14 +368,12 @@ function processRule_(rule, spreadsheet, globalEmailRecipients = []) {
     writeResultsToDebugSheet(regularRows);
   }
 
-  if (!regularRows) return; // Stop if report failed
-
   // --- 3b. Try to get PMAX data if this is a campaign-level rule ---
   let pmaxRows = [];
   if (ruleLevel === 'campaign') {
-    pmaxRows = _fetchPmaxData_(rule.name, rule.lookback_days, conditions.entityConditions);
+    pmaxRows = _fetchPmaxData_(rule.name, rule.lookback_days, conditions.entityConditions, maxSearchTerms);
   } else {
-    console.log(`Rule "${rule.name}" is at ${ruleLevel} level. PMAX search terms will only be fetched for campaign-level rules.`);
+    console.warn(`Rule "${rule.name}" is at ${ruleLevel} level. PMAX search terms will only be fetched for campaign-level rules.`);
   }
 
   // --- 3c. Get example terms ---
@@ -493,9 +491,11 @@ function _fetchExampleTerms_(spreadsheetId, ruleId, regularRows, ruleLevel) {
   console.log(`Fetching example terms from: ${url}`);
   let response;
   try {
+    debugLog(`Fetching example terms from: ${url}`);
     response = UrlFetchApp.fetch(url);
   } catch (error) {
-    console.log(`ERROR fetching example terms: ${error.message}`);
+    console.error(`ERROR fetching example terms: ${error.message}`);
+    console.error(`ERROR fetching example terms: ${error.stack}`);
     return []; // Return an empty array on error
   }
   const responseBody = response.getContentText();
@@ -544,9 +544,9 @@ function _fetchExampleTerms_(spreadsheetId, ruleId, regularRows, ruleLevel) {
 
   // for each example term, create a row for each campaign or ad group
   let exampleTermRows = [];
-  for (exampleTerm of exampleTermsArray) {
-    for (entity of entityData) {
-      exampleTermData = {
+  for (let exampleTerm of exampleTermsArray) {
+    for (let entity of entityData) {
+      let exampleTermData = {
         term: exampleTerm,
         campaignName: entity.campaignName,
         campaignId: entity.campaignId,
@@ -663,7 +663,7 @@ function _executeReport_(gaqlQuery, ruleName, maxSearchTerms = null) {
     const totalEntities = rows.totalNumEntities();
     // Warn if there might be more data than what's being returned
     if (maxSearchTerms && totalEntities >= maxSearchTerms) {
-      console.log(`WARNING: Rule "${ruleName}" found ${totalEntities} search terms but is limited to ${maxSearchTerms}. ` +
+      console.warn(`WARNING: Rule "${ruleName}" found ${totalEntities} search terms but is limited to ${maxSearchTerms}. ` +
         `Some search terms will not be processed.`);
     }
 
@@ -722,7 +722,6 @@ function _processReportRows_(params) {
   _processRegularRows_(regularRows, ruleLevel, autoApply, generateReport, performanceConditions, textConditions, STATUS, result, rule);
 
   // Process example terms
-  console.log(`\nProcessing example terms`);
   _processExampleTerms_(exampleTerms, ruleLevel, autoApply, generateReport, textConditions, STATUS, result, rule);
 
   return result;
@@ -742,9 +741,9 @@ function _processReportRows_(params) {
  * @private
  */
 function _processRegularRows_(rows, ruleLevel, autoApply, generateReport, performanceConditions, textConditions, STATUS, result, rule) {
-  console.log(`Processing report rows for rule level: ${ruleLevel}`);
+  console.log(`Processing regular (non-PMAX) report rows for rule level: ${ruleLevel}`);
   if (!rows || !rows.hasNext()) {
-    console.log(`No rows found for rule "${rule.name}". Skipping.`);
+    console.log(`No regular (non-PMAX) rows found for rule "${rule.name}". Skipping.`);
     return;
   }
 
@@ -763,7 +762,7 @@ function _processRegularRows_(rows, ruleLevel, autoApply, generateReport, perfor
     const addedRemoved = row['search_term_view.status'];
 
     if (DEBUG_MODE) {
-      console.log(`Processing search term row. search term: ${searchTerm}, campaign name: ${campaignName},   addedRemoved: ${addedRemoved}`);
+      console.log(`Processing regular search term row. search term: ${searchTerm}, campaign name: ${campaignName},   addedRemoved: ${addedRemoved}`);
     }
 
     let adGroupId = null;
@@ -771,7 +770,7 @@ function _processRegularRows_(rows, ruleLevel, autoApply, generateReport, perfor
 
     if (ruleLevel === 'adgroup') {
       if (typeof row['ad_group.id'] === 'undefined' || typeof row['ad_group.name'] === 'undefined') {
-        console.log(`Warning: ad_group.id/name missing in adgroup-level rule row. Term: "${searchTerm}". Skipping.`);
+        console.warn(`Warning: ad_group.id/name missing in adgroup-level rule row. Term: "${searchTerm}". Skipping.`);
         continue;
       }
       adGroupId = row['ad_group.id'];
@@ -802,11 +801,12 @@ function _processRegularRows_(rows, ruleLevel, autoApply, generateReport, perfor
       negativesToAddByAccount: result.negativesByAccount,
       outputDataRows: result.outputDataRows,
       termType: 'STANDARD',
-      aiResponseString: row.aiResponseString || "N/A"
+      aiResponseString: row.aiResponseString
     });
 
     if (autoApply) result.stats.collectedForNeg++;
   }
+  console.log(`\n --------- Processed ${result.stats.matched} regular search term rows\n\n`);
 }
 
 /**
@@ -845,12 +845,12 @@ function _processPmaxRows_(pmaxRows, ruleLevel, autoApply, generateReport, textC
       const addedRemoved = "--";
 
       if (!searchTerm) {
-        console.log(`Warning: PMAX row missing search term. Skipping.`);
+        console.warn(`Warning: PMAX row missing search term. Skipping.`);
         continue;
       }
 
       // Check conditions for PMAX terms
-      if (!_pmaxRowMeetsConditions_(searchTerm, textConditions, rule, campaignName, null, campaignId, null)) {
+      if (!_pmaxRowMeetsConditions_(pmaxRow, searchTerm, textConditions, rule, campaignName, null, campaignId, null)) {
         continue;
       }
 
@@ -873,7 +873,7 @@ function _processPmaxRows_(pmaxRows, ruleLevel, autoApply, generateReport, textC
         negativesToAddByAccount: result.negativesByAccount,
         outputDataRows: result.outputDataRows,
         termType: 'PMAX',
-        aiResponseString: pmaxRow.aiResponseString || "N/A"
+        aiResponseString: pmaxRow.aiResponseString
       });
       // Don't increment negativesCollectedCount for PMAX terms as they can't be negated
     } catch (pmaxTermError) {
@@ -971,7 +971,6 @@ function obfuscateSearchTerm(searchTerm) {
  * @private
  */
 function _processExampleTerms_(exampleTerms, ruleLevel, autoApply, generateReport, textConditions, STATUS, result, rule) {
-  console.log(`Processing report rows for rule level: ${ruleLevel}`);
   if (!exampleTerms || exampleTerms.length === 0) {
     console.log(`No example terms found for rule "${rule.name}". Skipping.`);
     return;
@@ -985,6 +984,7 @@ function _processExampleTerms_(exampleTerms, ruleLevel, autoApply, generateRepor
 
     // Skip if row doesn't meet conditions
     if (!_rowMeetsAllConditions_(exampleTerm, exampleTerm.term, [], textConditions, rule, exampleTerm.campaignName, exampleTerm.adGroupName, exampleTerm.campaignId, exampleTerm.adGroupId)) {
+      debugLog(`Example term "${exampleTerm.term}" does not meet all conditions. Skipping.`);
       continue;
     }
 
@@ -1007,7 +1007,7 @@ function _processExampleTerms_(exampleTerms, ruleLevel, autoApply, generateRepor
       negativesToAddByAccount: result.negativesByAccount,
       outputDataRows: result.outputDataRows,
       termType: 'EXAMPLE',
-      aiResponseString: "N/A"
+      aiResponseString: exampleTerm.aiResponseString
     });
 
     if (autoApply) result.stats.collectedForNeg++;
@@ -1031,12 +1031,14 @@ function _processExampleTerms_(exampleTerms, ruleLevel, autoApply, generateRepor
 function _rowMeetsAllConditions_(row, searchTerm, performanceConditions, textConditions, rule, campaignName, adGroupName, campaignId, adGroupId) {
   // Check Performance Conditions
   if (performanceConditions && !checkPerformanceConditions_(row, performanceConditions)) {
+    debugLog(`Search term "${searchTerm}" does not meet performance conditions. Skipping.`);
     return false;
   }
 
   // Check Text Conditions (true if term should be excluded)
   const shouldExcludeText = checkTextConditions_(searchTerm, textConditions);
   if (!shouldExcludeText) {
+    debugLog(`Search term "${searchTerm}" does not meet text conditions. Skipping.`);
     return false;
   }
 
@@ -1050,6 +1052,7 @@ function _rowMeetsAllConditions_(row, searchTerm, performanceConditions, textCon
 
   // If AI says it's relevant and we're not in log mode, skip
   if (!shouldExcludeAi && !rule.ai_list_all_search_terms) {
+    debugLog(`Search term "${searchTerm}" does not meet AI conditions. Skipping.`);
     return false;
   }
 
@@ -1058,6 +1061,7 @@ function _rowMeetsAllConditions_(row, searchTerm, performanceConditions, textCon
 
 /**
  * Checks if a PMAX row meets text and AI conditions.
+ * @param {Object} pmaxRow The PMAX row.
  * @param {string} searchTerm The search term.
  * @param {Object} textConditions Parsed text conditions.
  * @param {Object} rule The rule object.
@@ -1068,7 +1072,7 @@ function _rowMeetsAllConditions_(row, searchTerm, performanceConditions, textCon
  * @return {boolean} True if the row meets all conditions.
  * @private
  */
-function _pmaxRowMeetsConditions_(searchTerm, textConditions, rule, campaignName, adGroupName, campaignId, adGroupId) {
+function _pmaxRowMeetsConditions_(pmaxRow, searchTerm, textConditions, rule, campaignName, adGroupName, campaignId, adGroupId) {
   // Check Text Conditions (true if term should be excluded)
   const shouldExcludeText = checkTextConditions_(searchTerm, textConditions);
   if (!shouldExcludeText) {
@@ -1077,6 +1081,7 @@ function _pmaxRowMeetsConditions_(searchTerm, textConditions, rule, campaignName
 
   // Check AI Prompt Condition
   const aiResponseString = getAiResponseString_(searchTerm, rule, campaignName, adGroupName, campaignId, adGroupId);
+  pmaxRow.aiResponseString = aiResponseString; // Store for later use
 
   // We'll classify "N/A" as relevant as we don't know if it's relevant or not
   const isRelevant = (response) => response.toLowerCase() === "relevant" || response.toLowerCase() === "n/a";
@@ -1108,7 +1113,7 @@ function _pmaxRowMeetsConditions_(searchTerm, textConditions, rule, campaignName
  * @private
  */
 function processMatchedTerm_(params) {
-  console.log(`Processing example term ${params.searchTerm}`);
+  debugLog(`Processing search term ${params.searchTerm}`);
   try {
     // Determine negative status and collect negatives if auto-apply is enabled
     const negativeStatus = determineNegativeStatus_({
@@ -1116,7 +1121,7 @@ function processMatchedTerm_(params) {
       autoApply: params.autoApply,
       STATUS: params.STATUS
     });
-    console.log(`Negative status: ${negativeStatus}`);
+    debugLog(`Negative status: ${negativeStatus}`);
 
     // Collect negatives for auto-apply if applicable - only standard and example terms can be negated
     if (params.autoApply && (params.termType === 'STANDARD' || params.termType === 'EXAMPLE' || params.termType === 'PMAX')) {
@@ -1143,7 +1148,7 @@ function processMatchedTerm_(params) {
         termType: params.termType,
         negativeStatus: negativeStatus,
         outputDataRows: params.outputDataRows,
-        aiResponseString: params.aiResponseString || "N/A"
+        aiResponseString: params.aiResponseString
       });
     }
   } catch (e) {
@@ -1292,7 +1297,7 @@ function generateReportData_(params) {
     });
 
     if (!metrics) {
-      console.log(`Warning: Could not get metrics for matched row "${params.searchTerm}". Skipping report row.`);
+      console.warn(`Warning: Could not get metrics for matched row "${params.searchTerm}". Skipping report row.`);
       return;
     }
 
@@ -1305,7 +1310,7 @@ function generateReportData_(params) {
       negativeStatus: params.negativeStatus,
       ruleLevel: params.ruleLevel,
       termType: params.termType,
-      aiResponseString: params.aiResponseString || "N/A"
+      aiResponseString: params.aiResponseString
     });
 
     params.outputDataRows.push(outputRow);
@@ -1398,7 +1403,7 @@ function buildOutputRow_(params) {
     metrics.cpc.toFixed(2),
     metrics.roas.toFixed(2),
     params.negativeStatus,
-    params.aiResponseString || "N/A" // Use aiResponseString or default to N/A
+    params.aiResponseString
   ];
 
   if (params.ruleLevel === 'campaign' || params.ruleLevel === 'adgroup') {
@@ -1418,7 +1423,7 @@ function buildOutputRow_(params) {
  * @param {Array<Object>} campaigns Array of campaign objects with id and name.
  * @return {Array<Object>} Array of PMAX search term objects.
  */
-function getPmaxSearchTerms(campaigns) {
+function getPmaxSearchTerms(campaigns, maxSearchTerms) {
   if (!campaigns || !campaigns.length) {
     return [];
   }
@@ -1434,7 +1439,7 @@ function getPmaxSearchTerms(campaigns) {
 
       // Build query to get PMAX search terms for this campaign
       // Note: campaign_search_term_insight only supports specific metrics
-      const query = `
+      let query = `
                 SELECT
                     campaign_search_term_insight.category_label,
                     metrics.clicks,
@@ -1446,54 +1451,55 @@ function getPmaxSearchTerms(campaigns) {
                 AND campaign_search_term_insight.campaign_id = '${campaignId}'
             `;
 
-      console.log(`Executing PMAX search terms query for campaign ${campaignId} (${campaignName})`);
-
-      try {
-        const report = AdsApp.report(query);
-        const rows = report.rows();
-
-        let termCount = 0;
-        while (rows.hasNext()) {
-          const row = rows.next();
-          termCount++;
-
-          // Skip empty search terms
-          if (row['campaign_search_term_insight.category_label'].trim() === '') {
-            continue;
-          }
-
-          // Log if conversions_value is missing
-          if (typeof row['metrics.conversions_value'] === 'undefined') {
-            console.log(`Warning: PMAX search term "${row['campaign_search_term_insight.category_label']}" is missing conversions_value. Using default of 0.`);
-          }
-
-          // Format data in a way similar to regular search term report
-          // For PMAX, we have to estimate cost since cost_micros isn't available
-          // We'll use 0 for cost since it's not available directly
-          allSearchTerms.push({
-            searchTerm: row['campaign_search_term_insight.category_label'],
-            campaignId: campaignId,
-            campaignName: campaignName,
-            impressions: parseInt(row['metrics.impressions'] || 0),
-            clicks: parseInt(row['metrics.clicks'] || 0),
-            cost: 0, // Cost not available for PMAX search terms
-            conversions: parseFloat(row['metrics.conversions'] || 0),
-            conversions_value: parseFloat(row['metrics.conversions_value'] || 0),
-            isPmax: true
-          });
-        }
-
-        console.log(`Retrieved ${termCount} search terms for PMAX campaign ${campaignId} (${campaignName})`);
-      } catch (reportError) {
-        console.log(`Error executing report for PMAX campaign ${campaignId}: ${reportError.message}`);
-        console.log(`Query: ${query}`);
+      // Add LIMIT clause if maxSearchTerms is specified
+      if (maxSearchTerms && !isNaN(maxSearchTerms) && maxSearchTerms > 0) {
+        query += ` LIMIT ${maxSearchTerms}`;
+        console.log(`Applied search terms limit of ${maxSearchTerms} to GAQL query.`);
       }
 
-    } catch (e) {
-      console.log(`Error getting search terms for PMAX campaign ${campaign.id}: ${e.message}`);
-      console.log(`Stack trace: ${e.stack}`);
-      // Continue with the next campaign
+      console.log(`Executing PMAX search terms query for campaign ${campaignId} (${campaignName})`);
+
+      const report = AdsApp.report(query);
+      const rows = report.rows();
+
+      let termCount = 0;
+      while (rows.hasNext()) {
+        const row = rows.next();
+        termCount++;
+
+        // Skip empty search terms
+        if (row['campaign_search_term_insight.category_label'].trim() === '') {
+          continue;
+        }
+
+        // Log if conversions_value is missing
+        if (typeof row['metrics.conversions_value'] === 'undefined') {
+          console.warn(`Warning: PMAX search term "${row['campaign_search_term_insight.category_label']}" is missing conversions_value. Using default of 0.`);
+        }
+
+        // Format data in a way similar to regular search term report
+        // For PMAX, we have to estimate cost since cost_micros isn't available
+        // We'll use 0 for cost since it's not available directly
+        allSearchTerms.push({
+          searchTerm: row['campaign_search_term_insight.category_label'],
+          campaignId: campaignId,
+          campaignName: campaignName,
+          impressions: parseInt(row['metrics.impressions'] || 0),
+          clicks: parseInt(row['metrics.clicks'] || 0),
+          cost: 0, // Cost not available for PMAX search terms
+          conversions: parseFloat(row['metrics.conversions'] || 0),
+          conversions_value: parseFloat(row['metrics.conversions_value'] || 0),
+          isPmax: true
+        });
+      }
+
+      console.log(`Retrieved ${termCount} search terms for PMAX campaign ${campaignId} (${campaignName})`);
+    } catch (reportError) {
+      console.log(`Error executing report for PMAX campaign ${campaignId}: ${reportError.message}`);
+      console.log(`Query: ${query}`);
     }
+
+
   }
 
   return allSearchTerms;
@@ -1670,20 +1676,20 @@ function adGroupNegativeKeywordService(adGroup, negativeKeywords) {
   for (const keywordText of negativeKeywords) {
     // Check if keywordText is valid before formatting
     if (!keywordText || typeof keywordText !== 'string' || keywordText.trim() === '') {
-      console.log(`Warning: Skipping invalid keyword text: "${keywordText}"`);
+      console.warn(`Warning: Skipping invalid keyword text: "${keywordText}"`);
       continue;
     }
     const negativeKeywordFormatted = addMatchType(keywordText, NEGATIVE_MATCH_TYPE);
     // Check if formatting returned null (e.g., empty string after trim)
     if (!negativeKeywordFormatted) {
-      console.log(`Warning: Skipping keyword "${keywordText}" due to formatting issue.`);
+      console.warn(`Warning: Skipping keyword "${keywordText}" due to formatting issue.`);
       continue;
     }
     try {
       adGroup.createNegativeKeyword(negativeKeywordFormatted);
     } catch (e) {
       // Log errors but continue trying to add others
-      console.log(`  ERROR adding negative "${negativeKeywordFormatted}" to Ad Group ID ${adGroup.getId()}: ${e}`);
+      console.error(`  ERROR adding negative "${negativeKeywordFormatted}" to Ad Group ID ${adGroup.getId()}: ${e}`);
     }
   }
 }
@@ -2082,34 +2088,21 @@ function _compareMetric_(metricValue, operator, thresholdValue) {
  * @private
  */
 function checkTextConditions_(searchTerm, textConditions) {
+  debugLog(`Checking text conditions for search term "${searchTerm}" with conditions ${JSON.stringify(textConditions)}`);
   // If no conditions/sections defined in the rule, the term should not be excluded by default.
   if (!textConditions || !Array.isArray(textConditions.sections) || textConditions.sections.length === 0) {
-    // console.log(`No valid text condition sections found for term "${searchTerm}". Term should not be excluded.`);
+    debugLog(`No valid text condition sections found for term "${searchTerm}". Term should not be excluded.`);
     return true; // Should be excluded
   }
 
   // Assume SearchTermMatcher is globally available
-  let matcher;
-  try {
-    matcher = new SearchTermMatcher();
-  } catch (e) {
-    console.log(`FATAL ERROR: Could not instantiate or access global SearchTermMatcher: ${e.message}. Text checks cannot proceed.`);
-    // Fail safe: if matcher isn't available, assume the term should not be excluded.
-    return false;
-  }
+  let matcher = new SearchTermMatcher();
 
-  try {
-    // shouldExclude returns true if the term FAILS the conditions (and should be excluded).
-    const shouldExcludeTerm = matcher.shouldExclude(searchTerm, textConditions);
-    // console.log(`SearchTermMatcher.shouldExclude("${searchTerm}", ...) returned: ${shouldExcludeTerm}.`);
-    return shouldExcludeTerm; // Directly return the exclusion flag
+  // shouldExclude returns true if the term FAILS the conditions (and should be excluded).
+  const shouldExcludeTerm = matcher.shouldExclude(searchTerm, textConditions);
+  console.log(`SearchTermMatcher.shouldExclude("${searchTerm}", ...) returned: ${shouldExcludeTerm}.`);
+  return shouldExcludeTerm; // Directly return the exclusion flag
 
-  } catch (e) {
-    // Log errors during the matching process
-    console.log(`Error during SearchTermMatcher.shouldExclude for term "${searchTerm}" with conditions ${JSON.stringify(textConditions)}: ${e.message}`);
-    // Fail safe: if an error occurs during matching, assume the term should not be excluded.
-    return false;
-  }
 }
 
 /**
@@ -2238,58 +2231,68 @@ function _writeDataOrMessage_(sheet, data, startRow = 1) {
     }
   }
 
-  // Check if data is valid and has more than just a header row
-  if (data && data.length > 1 && data[0] && data[0].length > 0) {
-    const numRows = data.length;
-    const numCols = data[0].length;
-    console.log(`Writing ${numRows - 1} data rows (${numCols} columns) to sheet: "${sheet.getName()}" starting at row ${startRow}`);
+  // console.log(JSON.stringify(data));
 
-    // Ensure sheet is large enough before writing
-    const requiredRows = startRow + numRows - 1;
-    const currentMaxRows = sheet.getMaxRows();
-    if (currentMaxRows < requiredRows) {
-      sheet.insertRowsAfter(currentMaxRows, requiredRows - currentMaxRows);
-    }
-    const currentMaxCols = sheet.getMaxColumns();
-    if (currentMaxCols < numCols) {
-      sheet.insertColumnsAfter(currentMaxCols, numCols - currentMaxCols);
-    }
-
-    // Write data starting at the specified row
-    const dataRange = sheet.getRange(startRow, 1, numRows, numCols);
-    dataRange.setValues(data);
-
-    // Re-apply the filter to the new data range (including headers)
-    try {
-      dataRange.createFilter();
-      console.log(`Applied filter to range ${dataRange.getA1Notation()} on sheet "${sheet.getName()}".`);
-    } catch (createFilterError) {
-      console.log(`Warning: Could not apply filter to sheet "${sheet.getName()}". Error: ${createFilterError}`);
-    }
-
-  } else {
-    // Handle case with no data or only headers
-    const message = "No matching search terms found for this rule.";
-    console.log(`${message} Writing message to sheet: "${sheet.getName()}" at row ${startRow}`);
-    sheet.getRange(startRow, 1).setValue(message);
-
-    // Clean up unused rows/columns if sheet might have had old data
-    const lastRow = sheet.getLastRow();
-    if (lastRow > startRow) {
-      sheet.deleteRows(startRow + 1, lastRow - startRow);
-    }
-    const lastCol = sheet.getLastColumn();
-    if (lastCol > 1) {
-      sheet.deleteColumns(2, lastCol - 1);
-    }
-    // Ensure no filter exists on an empty/message-only sheet
-    const finalFilterCheck = sheet.getFilter();
-    if (finalFilterCheck) {
-      try { finalFilterCheck.remove(); } catch (e) { /* Ignore */ }
-    }
+  if (!data || data.length < 2) {
+    writeMessageToSheet(sheet, "No matching search terms found for this rule.", startRow);
+    return;
   }
+
+  writeDataToSheet(sheet, data, startRow);
+
 }
 
+function writeMessageToSheet(sheet, message, startRow = 1) {
+  console.log(`${message} Writing message to sheet: "${sheet.getName()}" at row ${startRow}`);
+  sheet.getRange(startRow, 1).setValue(message);
+
+  // Clean up unused rows/columns if sheet might have had old data
+  const lastRow = sheet.getLastRow();
+  if (lastRow > startRow) {
+    sheet.deleteRows(startRow + 1, lastRow - startRow);
+  }
+  const lastCol = sheet.getLastColumn();
+  if (lastCol > 1) {
+    sheet.deleteColumns(2, lastCol - 1);
+  }
+  // Ensure no filter exists on an empty/message-only sheet
+  const finalFilterCheck = sheet.getFilter();
+  if (finalFilterCheck) {
+    try { finalFilterCheck.remove(); } catch (e) { /* Ignore */ }
+  }
+
+}
+
+function writeDataToSheet(sheet, data, startRow = 1) {
+  const numRows = data.length;
+  const numCols = data[0].length;
+  console.log(`Writing ${numRows - 1} data rows (${numCols} columns) to sheet: "${sheet.getName()}" starting at row ${startRow}`);
+
+  // Ensure sheet is large enough before writing
+  const requiredRows = startRow + numRows - 1;
+  const currentMaxRows = sheet.getMaxRows();
+  if (currentMaxRows < requiredRows) {
+    sheet.insertRowsAfter(currentMaxRows, requiredRows - currentMaxRows);
+  }
+  const currentMaxCols = sheet.getMaxColumns();
+  if (currentMaxCols < numCols) {
+    sheet.insertColumnsAfter(currentMaxCols, numCols - currentMaxCols);
+  }
+
+  // Write data starting at the specified row
+  const dataRange = sheet.getRange(startRow, 1, numRows, numCols);
+  dataRange.setValues(data);
+  console.log(`Wrote ${numRows} rows to sheet: "${sheet.getName()}" starting at row ${startRow}`);
+
+  // Re-apply the filter to the new data range (including headers)
+  try {
+    dataRange.createFilter();
+    console.log(`Applied filter to range ${dataRange.getA1Notation()} on sheet "${sheet.getName()}".`);
+  } catch (createFilterError) {
+    console.log(`Warning: Could not apply filter to sheet "${sheet.getName()}". Error: ${createFilterError}`);
+  }
+
+}
 /**
  * Extracts the Spreadsheet ID from a Google Sheet URL.
  * @param {string} url The Google Sheet URL.
@@ -3424,7 +3427,7 @@ class PMaxReportBuilder {
    * @param {Array<Object>} campaigns Array of campaign objects with id and name.
    * @return {Array<Object>} Array of PMAX search term objects.
    */
-  getPmaxSearchTerms(campaigns) {
+  getPmaxSearchTerms(campaigns, maxSearchTerms) {
     if (!campaigns || !campaigns.length) {
       return [];
     }
@@ -3433,14 +3436,13 @@ class PMaxReportBuilder {
 
     // Process each campaign one at a time
     for (const campaign of campaigns) {
-      try {
-        const campaignId = campaign.id;
-        const campaignName = campaign.name;
-        const dateCondition = _getDateRangeCondition_(this.lookbackDays);
+      const campaignId = campaign.id;
+      const campaignName = campaign.name;
+      const dateCondition = _getDateRangeCondition_(this.lookbackDays);
 
-        // Build query to get PMAX search terms for this campaign
-        // Note: campaign_search_term_insight only supports specific metrics
-        const query = `
+      // Build query to get PMAX search terms for this campaign
+      // Note: campaign_search_term_insight only supports specific metrics
+      let query = `
                     SELECT
                         campaign_search_term_insight.category_label,
                         metrics.clicks,
@@ -3452,46 +3454,48 @@ class PMaxReportBuilder {
                     AND campaign_search_term_insight.campaign_id = '${campaignId}'
                 `;
 
-        console.log(`Executing PMAX search terms query for campaign ${campaignId} (${campaignName})`);
-        const report = AdsApp.report(query);
-        const rows = report.rows();
+      // Add LIMIT clause if maxSearchTerms is specified
+      if (maxSearchTerms && !isNaN(maxSearchTerms) && maxSearchTerms > 0) {
+        query += ` LIMIT ${maxSearchTerms}`;
+        console.log(`Applied search terms limit of ${maxSearchTerms} to GAQL query.`);
+      }
 
-        let termCount = 0;
-        while (rows.hasNext()) {
-          const row = rows.next();
-          termCount++;
+      console.log(`Executing PMAX search terms query for campaign ${campaignId} (${campaignName})`);
+      const report = AdsApp.report(query);
+      const rows = report.rows();
 
-          if (row['campaign_search_term_insight.category_label'].trim() === '') {
-            continue;
-          }
+      let termCount = 0;
+      while (rows.hasNext()) {
+        const row = rows.next();
+        termCount++;
 
-          // Log if conversions_value is missing
-          if (typeof row['metrics.conversions_value'] === 'undefined') {
-            console.log(`Warning: PMAX search term "${row['campaign_search_term_insight.category_label']}" is missing conversions_value. Using default of 0.`);
-          }
-
-          // Format data in a way similar to regular search term report
-          // For PMAX, we have to estimate cost since cost_micros isn't available
-          // We'll use 0 for cost since it's not available directly
-          allSearchTerms.push({
-            searchTerm: row['campaign_search_term_insight.category_label'],
-            campaignId: campaignId,
-            campaignName: campaignName,
-            impressions: parseInt(row['metrics.impressions'] || 0),
-            clicks: parseInt(row['metrics.clicks'] || 0),
-            cost: 0, // Cost not available for PMAX search terms
-            conversions: parseFloat(row['metrics.conversions'] || 0),
-            conversions_value: parseFloat(row['metrics.conversions_value'] || 0),
-            isPmax: true
-          });
+        if (row['campaign_search_term_insight.category_label'].trim() === '') {
+          continue;
         }
 
-        console.log(`Retrieved ${termCount} search terms for PMAX campaign ${campaignId} (${campaignName})`);
+        // Log if conversions_value is missing
+        if (typeof row['metrics.conversions_value'] === 'undefined') {
+          console.log(`Warning: PMAX search term "${row['campaign_search_term_insight.category_label']}" is missing conversions_value. Using default of 0.`);
+        }
 
-      } catch (e) {
-        console.log(`Error getting search terms for PMAX campaign ${campaign.id}: ${e.message}`);
-        // Continue with the next campaign
+        // Format data in a way similar to regular search term report
+        // For PMAX, we have to estimate cost since cost_micros isn't available
+        // We'll use 0 for cost since it's not available directly
+        allSearchTerms.push({
+          searchTerm: row['campaign_search_term_insight.category_label'],
+          campaignId: campaignId,
+          campaignName: campaignName,
+          impressions: parseInt(row['metrics.impressions'] || 0),
+          clicks: parseInt(row['metrics.clicks'] || 0),
+          cost: 0, // Cost not available for PMAX search terms
+          conversions: parseFloat(row['metrics.conversions'] || 0),
+          conversions_value: parseFloat(row['metrics.conversions_value'] || 0),
+          isPmax: true
+        });
       }
+
+      console.log(`Retrieved ${termCount} search terms for PMAX campaign ${campaignId} (${campaignName})`);
+
     }
 
     return allSearchTerms;
@@ -3593,7 +3597,7 @@ function sortRulesByLastRuntime_(rules, spreadsheet) {
  * @returns {Array} Array of PMAX search term rows or empty array if none found
  * @private
  */
-function _fetchPmaxData_(ruleName, lookbackDays, entityConditions) {
+function _fetchPmaxData_(ruleName, lookbackDays, entityConditions, maxSearchTerms) {
   let pmaxRows = [];
 
   try {
@@ -3607,7 +3611,7 @@ function _fetchPmaxData_(ruleName, lookbackDays, entityConditions) {
       console.log(`Rule "${ruleName}" matched ${matchingCampaigns.length} Performance Max campaigns. Fetching search terms...`);
 
       // Get search terms for the matching campaigns
-      pmaxRows = pmaxReportBuilder.getPmaxSearchTerms(matchingCampaigns);
+      pmaxRows = pmaxReportBuilder.getPmaxSearchTerms(matchingCampaigns, maxSearchTerms);
 
       if (pmaxRows && pmaxRows.length > 0) {
         console.log(`Found ${pmaxRows.length} PMAX search terms for rule "${ruleName}".`);
@@ -3961,4 +3965,11 @@ function getLlmStrategy(llmName) {
  */
 function isNumeric(value) {
   return !isNaN(parseInt(value)) && String(value).trim() === String(parseInt(value));
+}
+
+
+function debugLog(message) {
+  if (DEBUG_MODE) {
+    console.log(message);
+  }
 }
