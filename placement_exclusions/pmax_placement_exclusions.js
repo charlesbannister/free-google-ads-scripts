@@ -1,5 +1,6 @@
 /**
  * Placement Exclusions - Semi-automated (Shared List)
+ * For PMax and Display campaigns with optional ChatGPT integration
  * @author Charles Bannister (https://www.linkedin.com/in/charles-bannister/)
  * More scripts at shabba.io
  * 
