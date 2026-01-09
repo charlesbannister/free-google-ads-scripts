@@ -99,7 +99,3 @@ Variables at the top of the script:
 - **Shared exclusion list**: Must be created in Google Ads before running the script.
 - **Mobile app exclusions**: Mobile apps require bulk upload to exclude and will be noted in the sheet.
 - **ChatGPT API costs**: Using ChatGPT will incur OpenAI API costs based on your usage.
-
-## Version
-
-Current version: 2.3.0
