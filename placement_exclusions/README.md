@@ -21,6 +21,22 @@ The script uses a "Settings" sheet in your Google Sheet with the following optio
 - **Campaign Name Not Contains** - Exclude campaigns with names containing this text (leave empty for none)
 - **Enabled campaigns only** - Checkbox to include only enabled campaigns, or uncheck to also include paused campaigns (removed campaigns are always excluded)
 
+## Output Sheets
+
+The script creates four output sheets, one per placement type:
+
+- **Output: Website** - Website placements (includes ChatGPT Response column)
+- **Output: YouTube** - YouTube video placements (includes ChatGPT Response column)
+- **Output: Mobile Application** - Mobile app placements (no ChatGPT Response column)
+- **Output: Google Products** - Google Products placements (no ChatGPT Response column)
+
+The ChatGPT Response column is only included for Website and YouTube placements because ChatGPT can analyze website content. Mobile apps and Google Products use app IDs/product IDs which cannot be analyzed via URL fetching.
+
+Output sheet tabs are color-coded:
+
+- **Green tab** - Sheet has placement results
+- **Red tab** - No results found for this placement type
+
 ## Important Notes
 
 - The `performance_max_placement_view` resource only supports the impressions metric. Clicks, cost, conversions, and other metrics will show as 0 in the sheet.
