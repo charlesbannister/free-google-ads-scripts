@@ -1,15 +1,12 @@
 /**
- * Keyword-Based Negatives Script
+ * Auto Negative Keywords Script (Keyword Based)
+ * Based on the rules-based version: https://autoneg.shabba.io/
  * Automatically identifies potential negative keywords by comparing search terms
  * against the account's actual keywords within the same ad group.
  * 
  * @authors Charles Bannister & Gabriele Benedetti
  * @version 1.4.0
  * 
- * Google Ads API Query Builder Links:
- * - Search Term View: https://developers.google.com/google-ads/api/fields/v20/search_term_view_query_builder
- * - Keyword View: https://developers.google.com/google-ads/api/fields/v20/keyword_view_query_builder
- * - Ad Group: https://developers.google.com/google-ads/api/fields/v20/ad_group_query_builder
  */
 
 // ============================================================================
