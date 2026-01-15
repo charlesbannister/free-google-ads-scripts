@@ -7,7 +7,7 @@
  * This script grabs placement data from Performance Max and Display campaigns, writes to sheet with checkboxes for user selection,
  * then adds selected placements to a shared exclusion list using batch processing
  * Includes optional ChatGPT integration for website content analysis
- * Version: 2.3.0
+ * Version: 2.4.1
  */
 
 // Google Ads API Query Builder Links:
@@ -25,20 +25,18 @@
 // TODO: include a link to the template sheet
 
 // --- Configuration ---
-// const SPREADSHEET_URL = 'https://docs.google.com/spreadsheets/d/1jK0FjZKveWE7zhHhpbAWQJXaCFYzHsmN4iF-QVksWNU/edit?gid=0#gid=0';
-const SPREADSHEET_URL = 'YOUR_SPREADSHEET_URL_HERE';
 
+const SPREADSHEET_URL = 'YOUR_SPREADSHEET_URL_HERE';
 // The Google Sheet URL where placement data will be written
 // Click the link to make a copy:
 // https://docs.google.com/spreadsheets/d/18vdejatcc7b3cWLtNGdmpVFoSDQ4JXXvDiVDLRpAUb4/copy
+// Then paste the URL into the SPREADSHEET_URL variable above
 
 // Create this at: Tools & Settings > Shared Library > Placement exclusions
 
 const SETTINGS_SHEET_NAME = 'Settings';
 // The name of the sheet tab that contains configuration settings
 
-const DATA_SHEET_NAME = 'Placements';
-// The name of the sheet tab where placement data with checkboxes will be written
 
 const LLM_RESPONSES_SHEET_NAME = 'LLM Responses Cache';
 // The name of the sheet tab that caches ChatGPT responses by URL
@@ -126,15 +124,6 @@ const ONLY_PROCESS_CHANGES = false;
 // If true, skip fetching new placement data and only process checked placements from the sheets
 // If false, fetch new placement data and update the sheets as normal
 
-const GOOGLE_DOMAIN_EXCLUSIONS = [
-  'youtube.com',
-  'mail.google.com',
-  'google.com',
-  'gmail.com',
-  'googleusercontent.com'
-];
-// Domains that Google prohibits excluding due to policy
-// These will appear in reports with a note but cannot be excluded even if checked
 
 // --- Main Function ---
 function main() {
@@ -234,7 +223,7 @@ function main() {
         let cachedCount = 0;
         let failedCount = 0;
 
-        const llmSheet = getLlmResponsesSheet(spreadsheet);
+        const llmSheet = getOrCreateLlmResponsesSheet(spreadsheet);
 
         for (const placement of limitedData) {
           // Skip ChatGPT for mobile applications and Google Products
@@ -933,51 +922,6 @@ function getPlacementTypeFilters(settingsSheet) {
 
 
 /**
- * Extracts the TLD from a URL
- * @param {string} url - The URL to extract TLD from
- * @returns {string | null} The TLD (with leading dot) or null if can't extract
- */
-function extractTld(url) {
-  if (!url || typeof url !== 'string') {
-    return null;
-  }
-
-  // Remove protocol if present
-  let cleanUrl = url.replace(/^https?:\/\//i, '');
-
-  // Remove www. if present
-  cleanUrl = cleanUrl.replace(/^www\./i, '');
-
-  // Remove path and query parameters
-  cleanUrl = cleanUrl.split('/')[0];
-  cleanUrl = cleanUrl.split('?')[0];
-
-  // Split by dots and get the last parts (TLD)
-  const parts = cleanUrl.split('.');
-
-  if (parts.length < 2) {
-    return null; // Not a valid domain
-  }
-
-  // Try to get the TLD (last part or last two parts for country codes like .co.uk)
-  // Common two-part TLDs: .co.uk, .com.au, .co.nz, etc.
-  const twoPartTlds = ['.co.uk', '.com.au', '.co.nz', '.co.za', '.com.br', '.co.jp', '.com.cn', '.co.in', '.com.mx', '.com.ar', '.com.co'];
-
-  if (parts.length >= 2) {
-    const lastTwo = '.' + parts[parts.length - 2] + '.' + parts[parts.length - 1];
-    if (twoPartTlds.includes(lastTwo.toLowerCase())) {
-      return lastTwo.toLowerCase();
-    }
-  }
-
-  // Single-part TLD
-  const tld = '.' + parts[parts.length - 1];
-  return tld.toLowerCase();
-}
-
-
-
-/**
  * Gets ChatGPT settings from the ChatGPT sheet
  * @param {GoogleAppsScript.Spreadsheet.Sheet} chatGptSheet - The ChatGPT sheet
  * @returns {Object} ChatGPT settings object
@@ -1117,71 +1061,6 @@ function getResponseNotContainsList(chatGptSheet) {
     }
   }
 
-  return { enabled: list.length > 0, list: list };
-}
-
-/**
- * Generic function to get a list and enabled status from the ChatGPT sheet
- * @param {GoogleAppsScript.Spreadsheet.Sheet} chatGptSheet - The ChatGPT sheet
- * @param {string} listName - The name of the list (header text in Column A)
- * @param {number} valuesColumnIndex - The column index (1-based) where the list values are located (Column B = 2)
- * @returns {Object} Object with enabled status and list array
- */
-function getListFromChatGptSheet(chatGptSheet, listName, valuesColumnIndex) {
-  const dataRange = chatGptSheet.getDataRange();
-  const values = dataRange.getValues();
-  const valuesColumnArrayIndex = valuesColumnIndex - 1; // Convert to 0-based array index
-
-  // Find the header row in Column A
-  let headerRowIndex = -1;
-  for (let rowIndex = 0; rowIndex < values.length; rowIndex++) {
-    if (values[rowIndex][0] === listName) {
-      headerRowIndex = rowIndex;
-      break;
-    }
-  }
-
-  if (headerRowIndex === -1) {
-    if (DEBUG_MODE) {
-      console.log(`  ${listName} header not found in ChatGPT sheet`);
-    }
-    return { enabled: false, list: [] };
-  }
-
-  // Values are in Column B on the same row as the header (e.g., B13 for "Response Contains", B14 for "Response Not Contains")
-  // Also read from rows below if there are multiple values
-  const list = [];
-
-  // First, read the value from the same row as the header (Column B)
-  const headerRowValue = values[headerRowIndex][valuesColumnArrayIndex];
-  if (headerRowValue !== null && headerRowValue !== undefined && headerRowValue !== '') {
-    const trimmedValue = String(headerRowValue).trim();
-    if (trimmedValue) {
-      // Check if it's comma-separated values and split them
-      const valuesArray = trimmedValue.split(',').map(v => v.trim()).filter(v => v);
-      list.push(...valuesArray);
-    }
-  }
-
-  // Then read from rows below the header until we hit the next header or end of sheet
-  for (let rowIndex = headerRowIndex + 1; rowIndex < values.length; rowIndex++) {
-    // Stop if we hit the next header (Response Not Contains)
-    if (values[rowIndex][0] === 'Response Not Contains') {
-      break;
-    }
-
-    const value = values[rowIndex][valuesColumnArrayIndex];
-    if (value !== null && value !== undefined && value !== '') {
-      const trimmedValue = String(value).trim();
-      if (trimmedValue) {
-        // Check if it's comma-separated values and split them
-        const valuesArray = trimmedValue.split(',').map(v => v.trim()).filter(v => v);
-        list.push(...valuesArray);
-      }
-    }
-  }
-
-  // No checkbox - filters are active if list has values
   return { enabled: list.length > 0, list: list };
 }
 
@@ -2226,38 +2105,6 @@ function writePlacementDataToSheet(spreadsheet, placementData, settings) {
 }
 
 /**
- * Checks if a URL is a Google domain that cannot be excluded
- * @param {string} url - The URL to check
- * @returns {boolean} True if the URL is a Google domain
- */
-function isGoogleDomain(url) {
-  if (!url) {
-    return false;
-  }
-  const lowerUrl = String(url).toLowerCase();
-  for (const excludedDomain of GOOGLE_DOMAIN_EXCLUSIONS) {
-    if (lowerUrl.includes(excludedDomain)) {
-      return true;
-    }
-  }
-  return false;
-}
-
-/**
- * Gets or creates the data sheet
- * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet - The spreadsheet object
- * @returns {GoogleAppsScript.Spreadsheet.Sheet} The data sheet
- */
-function getOrCreateDataSheet(spreadsheet) {
-  let dataSheet = spreadsheet.getSheetByName(DATA_SHEET_NAME);
-  if (!dataSheet) {
-    dataSheet = spreadsheet.insertSheet(DATA_SHEET_NAME);
-    console.log(`Created data sheet: ${DATA_SHEET_NAME}`);
-  }
-  return dataSheet;
-}
-
-/**
  * Gets or creates a placement type sheet
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet - The spreadsheet object
  * @param {string} placementTypeName - The name of the placement type (e.g., "YouTube Video", "Website")
@@ -3161,20 +3008,6 @@ function callChatGptApiWithRetry(apiKey, prompt, maxRetries = 3) {
 }
 
 /**
- * Gets the LLM responses cache sheet
- * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet - The spreadsheet object
- * @returns {GoogleAppsScript.Spreadsheet.Sheet} The LLM responses sheet
- * @throws {Error} If the sheet does not exist
- */
-function getLlmResponsesSheet(spreadsheet) {
-  const llmSheet = spreadsheet.getSheetByName(LLM_RESPONSES_SHEET_NAME);
-  if (!llmSheet) {
-    throw new Error(`Sheet "${LLM_RESPONSES_SHEET_NAME}" not found. Please copy the template sheet into your spreadsheet.`);
-  }
-  return llmSheet;
-}
-
-/**
  * Gets or creates the LLM responses cache sheet
  * @param {GoogleAppsScript.Spreadsheet.Spreadsheet} spreadsheet - The spreadsheet object
  * @returns {GoogleAppsScript.Spreadsheet.Sheet} The LLM responses sheet
@@ -3202,8 +3035,8 @@ function getCachedLlmResponse(llmSheet, url) {
   const dataRange = llmSheet.getDataRange();
   const values = dataRange.getValues();
 
-  // Start from row 4 (row 3 is header, so data starts at index 3)
-  for (let rowIndex = 3; rowIndex < values.length; rowIndex++) {
+  // Headers are in row 1 (index 0), so data starts from row 2 (index 1)
+  for (let rowIndex = 1; rowIndex < values.length; rowIndex++) {
     if (values[rowIndex][0] === url) {
       return values[rowIndex][1]; // Return the response
     }
@@ -3220,8 +3053,8 @@ function getCachedLlmResponse(llmSheet, url) {
  */
 function cacheLlmResponse(llmSheet, url, response) {
   const lastRow = llmSheet.getLastRow();
-  // If sheet is empty or only has header (row 3), start from row 4
-  const newRow = lastRow < 3 ? 4 : lastRow + 1;
+  // Headers are in row 1, so if sheet only has header, start from row 2
+  const newRow = lastRow < 1 ? 2 : lastRow + 1;
 
   const timestamp = new Date();
   llmSheet.getRange(newRow, 1, 1, 3).setValues([[url, response, timestamp]]);
