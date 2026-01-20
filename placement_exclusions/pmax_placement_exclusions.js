@@ -1,14 +1,19 @@
 /**
- * Placement Exclusions - Semi-automated (Shared List)
+ * Placement Exclusions - Semi-automated (PMax, Display, YouTube)
  * @author Charles Bannister (https://www.linkedin.com/in/charles-bannister/)
- * More scripts at shabba.io
+ * @author Erik Arter (https://www.linkedin.com/in/erikarter/)
+ * This script was Erik's idea via the God Tier Ads community.
+ * You can find the discussion here: https://go.godtierads.com/c/questions-answers/website-placement-exclusions
+ * 
+ * More scripts at:
+ * https://shabba.io
+ * https://github.com/charlesbannister/free-google-ads-scripts/
  * 
  * This script grabs placement data from Performance Max, Display, and Video/YouTube campaigns,
- * writes to sheet with checkboxes for user selection, then adds selected placements to a shared
- * exclusion list using batch processing.
+ * writes to sheet with checkboxes for user selection, then excludes the selected placements.
  * YouTube placements (YOUTUBE_CHANNEL, YOUTUBE_VIDEO) are written to the YouTube output tab.
  * Includes optional ChatGPT integration for website content analysis.
- * Version: 2.8.0
+ * Version: 2.9.2
  */
 
 // Google Ads API Query Builder Links:
@@ -23,10 +28,9 @@
 // 5. Paste the entire script into Google Ads (you can delete what's there)
 // 6. Preview the script! (You'll be prompted to authorise the first time it runs)
 
-// TODO: include a link to the template sheet
-
 // --- Configuration ---
 const SPREADSHEET_URL = 'YOUR_SPREADSHEET_URL_HERE';
+
 // The Google Sheet URL where placement data will be written
 // Click the link to make a copy:
 // https://docs.google.com/spreadsheets/d/1jG_igH1QGdyBSbeqj2ELxZEg3uOFYd3wcWaQ_eDfY9o/copy
@@ -162,6 +166,37 @@ function debugLog(message) {
   if (DEBUG_MODE) {
     console.log(message);
   }
+}
+
+// --- Filter Helper Functions ---
+
+/**
+ * Checks if a string contains any of the filter strings as whole words (case-insensitive)
+ * Splits on non-alphanumeric characters to extract words, then compares exactly
+ * This prevents false positives like "Essex" matching "sex"
+ * @param {string} value - The value to check
+ * @param {Array<string>} filterList - List of words to match against
+ * @returns {boolean} true if value contains any filter word
+ */
+function containsAny(value, filterList) {
+  if (!filterList || filterList.length === 0) return false;
+  const valueWords = String(value || '').toLowerCase().split(/[^a-z0-9]+/).filter(word => word.length > 0);
+  return filterList.some(filter => {
+    const filterLower = filter.toLowerCase();
+    return valueWords.some(word => word === filterLower);
+  });
+}
+
+/**
+ * Checks if a URL ends with any of the TLD strings (case-insensitive)
+ * @param {string} url - The URL to check
+ * @param {Array<string>} tldList - List of TLDs to match against
+ * @returns {boolean} true if URL ends with any TLD
+ */
+function endsWithAny(url, tldList) {
+  if (!tldList || tldList.length === 0) return false;
+  const urlLower = String(url || '').toLowerCase();
+  return tldList.some(tld => urlLower.endsWith(tld.toLowerCase()));
 }
 
 /**
@@ -1198,23 +1233,32 @@ function getPlacementGaqlQuery(dateRange, settings, campaignType) {
     `campaign.advertising_channel_type = '${campaignType}'`
   ];
 
-  // Campaign status filter: always exclude REMOVED, include PAUSED based on setting
+  // Campaign status filter
   if (settings.enabledCampaignsOnly) {
     conditions.push(`campaign.status = 'ENABLED'`);
   } else {
     conditions.push(`campaign.status IN ('ENABLED', 'PAUSED')`);
   }
 
-  // Note: Campaign name filters are applied in JavaScript after fetching data
-  // because Google Ads Scripts GAQL doesn't support REGEXP_MATCH or case-insensitive matching
+  // Campaign name filters (case-sensitive LIKE)
+  if (settings.campaignNameContains && settings.campaignNameContains.trim() !== '') {
+    conditions.push(`campaign.name LIKE '%${settings.campaignNameContains}%'`);
+  }
+  if (settings.campaignNameNotContains && settings.campaignNameNotContains.trim() !== '') {
+    conditions.push(`campaign.name NOT LIKE '%${settings.campaignNameNotContains}%'`);
+  }
 
-  const whereClause = conditions.join(' AND ');
+  // Impressions threshold (available for all campaign types)
+  if (settings.minimumImpressions > 0) {
+    conditions.push(`metrics.impressions > ${settings.minimumImpressions}`);
+  }
 
   // Add LIMIT clause if maxResults is set (0 means no limit)
-  // Note: LIMIT applies per query type, so total results may be up to 3x this value (PMax + Display + Video)
   const limitClause = settings.maxResults > 0 ? ` LIMIT ${settings.maxResults}` : '';
 
   if (campaignType === 'PERFORMANCE_MAX') {
+    // PMax only has impressions metric available
+    const whereClause = conditions.join(' AND ');
     const query = `
       SELECT
         campaign.id,
@@ -1232,8 +1276,19 @@ function getPlacementGaqlQuery(dateRange, settings, campaignType) {
     `;
     return query;
   } else if (campaignType === 'DISPLAY' || campaignType === 'VIDEO') {
-    // Both Display and Video campaigns use detail_placement_view
-    // Video campaigns return YOUTUBE_CHANNEL and YOUTUBE_VIDEO placement types
+    // Display/Video has full metrics - add clicks, cost, conversions filters
+    if (settings.minimumClicks > 0) {
+      conditions.push(`metrics.clicks > ${settings.minimumClicks}`);
+    }
+    if (settings.minimumCost > 0) {
+      const costMicros = settings.minimumCost * 1000000;
+      conditions.push(`metrics.cost_micros > ${costMicros}`);
+    }
+    if (settings.maximumConversions > 0) {
+      conditions.push(`metrics.conversions < ${settings.maximumConversions}`);
+    }
+
+    const whereClause = conditions.join(' AND ');
     const query = `
       SELECT
         campaign.id,
@@ -1397,14 +1452,13 @@ function calculatePlacementMetrics(placementData) {
  * @returns {Array<Object>} Filtered placement data
  */
 function filterPlacementData(placementData, settings) {
-  return placementData.filter(placement => {
-    const meetsImpressionsThreshold = placement.impressions > settings.minimumImpressions;
-    // Note: clicks are not available in performance_max_placement_view, so this filter will always pass
-    // if minimumClicks is 0, otherwise it will filter out all placements
-    const meetsClicksThreshold = settings.minimumClicks === 0 || placement.clicks > settings.minimumClicks;
-    const meetsCostThreshold = settings.minimumCost === 0 || placement.cost > settings.minimumCost;
-    const meetsConversionsThreshold = settings.maximumConversions === 0 || placement.conversions < settings.maximumConversions;
+  // Note: Metric thresholds (impressions, clicks, cost, conversions) and campaign name filters
+  // are now applied in GAQL for better performance. This function handles placement-specific filters.
+  //
+  // WANTED filters (Columns F-J) = Allowlist - if matches, HIDE from report (it's good)
+  // UNWANTED filters (Columns A-E) = Flagging only, not used for filtering
 
+  return placementData.filter(placement => {
     // Check placement type filter
     let meetsPlacementTypeFilter = true;
     if (settings.placementTypeFilters) {
@@ -1418,200 +1472,64 @@ function filterPlacementData(placementData, settings) {
       } else if (placementType.includes('GOOGLE_PRODUCTS')) {
         meetsPlacementTypeFilter = settings.placementTypeFilters.googleProducts.enabled;
       } else {
-        // Unknown placement type - include it by default
         meetsPlacementTypeFilter = true;
       }
 
       if (DEBUG_MODE && !meetsPlacementTypeFilter) {
-        console.log(`  Filtered out placement (placement type not selected): ${placement.placement} (type: ${placement.placementType})`);
+        console.log(`  Filtered out (placement type not selected): ${placement.placement} (${placement.placementType})`);
       }
     }
 
-    // Check Placement Contains filter (checks placement field only, only if enabled and list has items)
-    let meetsPlacementContainsFilter = true;
-    if (settings.placementContainsEnabled) {
-      if (settings.placementContainsList && settings.placementContainsList.length > 0) {
-        const placementString = String(placement.placement || '').toLowerCase();
-        let containsMatch = false;
-        for (const containsString of settings.placementContainsList) {
-          const lowerContainsString = containsString.toLowerCase();
-          if (placementString.includes(lowerContainsString)) {
-            containsMatch = true;
-            break;
-          }
-        }
-        meetsPlacementContainsFilter = containsMatch;
-        if (DEBUG_MODE && !meetsPlacementContainsFilter) {
-          console.log(`  Filtered out placement (Placement field does not contain required strings): ${placement.placement}`);
-        }
-      } else {
-        // Filter is enabled but list is empty - skip filter (allow all)
-        debugLog(`  Placement Contains filter enabled but list is empty - skipping filter`)
+    // Column F: Wanted Placement (allowlist) - "The Placement field should include these words/phrases"
+    // If matches → GOOD → HIDE from report
+    let meetsWantedPlacementFilter = true;
+    if (settings.placementContainsEnabled && settings.placementContainsList?.length > 0) {
+      const matchesAllowlist = containsAny(placement.placement, settings.placementContainsList);
+      meetsWantedPlacementFilter = !matchesAllowlist;
+      if (!meetsWantedPlacementFilter) {
+        debugLog(`  Hidden (Placement matches allowlist): ${placement.placement}`);
       }
     }
 
-    // Check Placement Not Contains filter (checks placement field only, only if enabled and list has items)
-    let meetsPlacementNotContainsFilter = true;
-    if (settings.placementNotContainsEnabled) {
-      if (settings.placementNotContainsList && settings.placementNotContainsList.length > 0) {
-        const placementString = String(placement.placement || '').toLowerCase();
-        let containsMatch = false;
-        for (const notContainsString of settings.placementNotContainsList) {
-          const lowerNotContainsString = notContainsString.toLowerCase();
-          if (placementString.includes(lowerNotContainsString)) {
-            containsMatch = true;
-            break;
-          }
-        }
-        // If it contains any "not contains" item, filter it out
-        meetsPlacementNotContainsFilter = !containsMatch;
-        if (DEBUG_MODE && !meetsPlacementNotContainsFilter) {
-          console.log(`  Filtered out placement (Placement field contains excluded strings): ${placement.placement}`);
-        }
-      } else {
-        // Filter is enabled but list is empty - skip filter (allow all)
-        debugLog(`  Placement Not Contains filter enabled but list is empty - skipping filter`)
+    // Column G: Wanted Display Name (allowlist) - "The Display Name field should include these words/phrases"
+    // If matches → GOOD → HIDE from report
+    let meetsWantedDisplayNameFilter = true;
+    if (settings.displayNameContainsEnabled && settings.displayNameContainsList?.length > 0) {
+      const matchesAllowlist = containsAny(placement.displayName, settings.displayNameContainsList);
+      meetsWantedDisplayNameFilter = !matchesAllowlist;
+      if (!meetsWantedDisplayNameFilter) {
+        debugLog(`  Hidden (Display Name matches allowlist): ${placement.displayName}`);
       }
     }
 
-    // Check Display Name Contains filter (checks displayName field only, only if enabled and list has items)
-    let meetsDisplayNameContainsFilter = true;
-    if (settings.displayNameContainsEnabled) {
-      if (settings.displayNameContainsList && settings.displayNameContainsList.length > 0) {
-        const displayNameString = String(placement.displayName || '').toLowerCase();
-        let containsMatch = false;
-        for (const containsString of settings.displayNameContainsList) {
-          const lowerContainsString = containsString.toLowerCase();
-          if (displayNameString.includes(lowerContainsString)) {
-            containsMatch = true;
-            break;
-          }
-        }
-        meetsDisplayNameContainsFilter = containsMatch;
-        if (DEBUG_MODE && !meetsDisplayNameContainsFilter) {
-          console.log(`  Filtered out placement (Display Name field does not contain required strings): ${placement.displayName}`);
-        }
-      } else {
-        // Filter is enabled but list is empty - skip filter (allow all)
-        debugLog(`  Display Name Contains filter enabled but list is empty - skipping filter`)
+    // Column H: Wanted Target URL (allowlist) - "The Target URL should include these words/phrases"
+    // If matches → GOOD → HIDE from report
+    let meetsWantedTargetUrlFilter = true;
+    if (settings.targetUrlContainsEnabled && settings.targetUrlContainsList?.length > 0) {
+      const matchesAllowlist = containsAny(placement.targetUrl, settings.targetUrlContainsList);
+      meetsWantedTargetUrlFilter = !matchesAllowlist;
+      if (!meetsWantedTargetUrlFilter) {
+        debugLog(`  Hidden (Target URL matches allowlist): ${placement.targetUrl}`);
       }
     }
 
-    // Check Display Name Not Contains filter (checks displayName field only, only if enabled and list has items)
-    let meetsDisplayNameNotContainsFilter = true;
-    if (settings.displayNameNotContainsEnabled) {
-      if (settings.displayNameNotContainsList && settings.displayNameNotContainsList.length > 0) {
-        const displayNameString = String(placement.displayName || '').toLowerCase();
-        let containsMatch = false;
-        for (const notContainsString of settings.displayNameNotContainsList) {
-          const lowerNotContainsString = notContainsString.toLowerCase();
-          if (displayNameString.includes(lowerNotContainsString)) {
-            containsMatch = true;
-            break;
-          }
-        }
-        // If it contains any "not contains" item, filter it out
-        meetsDisplayNameNotContainsFilter = !containsMatch;
-        if (DEBUG_MODE && !meetsDisplayNameNotContainsFilter) {
-          console.log(`  Filtered out placement (Display Name field contains excluded strings): ${placement.displayName}`);
-        }
-      } else {
-        // Filter is enabled but list is empty - skip filter (allow all)
-        debugLog(`  Display Name Not Contains filter enabled but list is empty - skipping filter`)
+    // Columns I+J: Target TLDs (allowlist) - "The Target URL should end with this TLD"
+    // If matches → GOOD → HIDE from report
+    let meetsWantedTldsFilter = true;
+    if (settings.targetUrlEndsWithEnabled && settings.targetUrlEndsWithList?.length > 0) {
+      const matchesAllowlist = endsWithAny(placement.targetUrl, settings.targetUrlEndsWithList);
+      meetsWantedTldsFilter = !matchesAllowlist;
+      if (!meetsWantedTldsFilter) {
+        debugLog(`  Hidden (Target URL ends with allowed TLD): ${placement.targetUrl}`);
       }
     }
 
-    // Check Target URL Contains filter (checks targetUrl field only, only if enabled and list has items)
-    let meetsTargetUrlContainsFilter = true;
-    if (settings.targetUrlContainsEnabled) {
-      if (settings.targetUrlContainsList && settings.targetUrlContainsList.length > 0) {
-        const targetUrlString = String(placement.targetUrl || '').toLowerCase();
-        let containsMatch = false;
-        for (const containsString of settings.targetUrlContainsList) {
-          const lowerContainsString = containsString.toLowerCase();
-          if (targetUrlString.includes(lowerContainsString)) {
-            containsMatch = true;
-            break;
-          }
-        }
-        meetsTargetUrlContainsFilter = containsMatch;
-        if (!meetsTargetUrlContainsFilter) debugLog(`  Filtered out placement (Target URL field does not contain required strings): ${placement.targetUrl}`)
-      } else {
-        // Filter is enabled but list is empty - skip filter (allow all)
-        debugLog(`  Target URL Contains filter enabled but list is empty - skipping filter`)
-      }
-    }
+    // Note: UNWANTED filters (Columns A-E) are for flagging only, not filtering
+    // Placements matching unwanted patterns should APPEAR in the report so users can exclude them
 
-    // Check Target URL Ends With filter (checks targetUrl field only, only if enabled and list has items)
-    let meetsTargetUrlEndsWithFilter = true;
-    if (settings.targetUrlEndsWithEnabled) {
-      if (settings.targetUrlEndsWithList && settings.targetUrlEndsWithList.length > 0) {
-        const targetUrlString = String(placement.targetUrl || '').toLowerCase();
-        let endsWithMatch = false;
-        for (const endsWithString of settings.targetUrlEndsWithList) {
-          const lowerEndsWithString = endsWithString.toLowerCase();
-          if (targetUrlString.endsWith(lowerEndsWithString)) {
-            endsWithMatch = true;
-            break;
-          }
-        }
-        meetsTargetUrlEndsWithFilter = endsWithMatch;
-        if (!meetsTargetUrlEndsWithFilter) debugLog(`  Filtered out placement (Target URL field does not end with required strings): ${placement.targetUrl}`)
-      } else {
-        // Filter is enabled but list is empty - skip filter (allow all)
-        debugLog(`  Target URL Ends With filter enabled but list is empty - skipping filter`)
-      }
-    }
-
-    // Check Target URL Not Contains filter (checks targetUrl field only, only if enabled and list has items)
-    let meetsTargetUrlNotContainsFilter = true;
-    if (settings.targetUrlNotContainsEnabled) {
-      if (settings.targetUrlNotContainsList && settings.targetUrlNotContainsList.length > 0) {
-        const targetUrlString = String(placement.targetUrl || '').toLowerCase();
-        let containsMatch = false;
-        for (const notContainsString of settings.targetUrlNotContainsList) {
-          const lowerNotContainsString = notContainsString.toLowerCase();
-          if (targetUrlString.includes(lowerNotContainsString)) {
-            containsMatch = true;
-            break;
-          }
-        }
-        // If it contains any "not contains" item, filter it out
-        meetsTargetUrlNotContainsFilter = !containsMatch;
-        if (!meetsTargetUrlNotContainsFilter) debugLog(`  Filtered out placement (Target URL field contains excluded strings): ${placement.targetUrl}`)
-      } else {
-        // Filter is enabled but list is empty - skip filter (allow all)
-        debugLog(`  Target URL Not Contains filter enabled but list is empty - skipping filter`)
-      }
-    }
-
-    // Check Target URL Not Ends With filter (checks targetUrl field only, only if enabled and list has items)
-    let meetsTargetUrlNotEndsWithFilter = true;
-    if (settings.targetUrlNotEndsWithEnabled) {
-      if (settings.targetUrlNotEndsWithList && settings.targetUrlNotEndsWithList.length > 0) {
-        const targetUrlString = String(placement.targetUrl || '').toLowerCase();
-        let endsWithMatch = false;
-        for (const notEndsWithString of settings.targetUrlNotEndsWithList) {
-          const lowerNotEndsWithString = notEndsWithString.toLowerCase();
-          if (targetUrlString.endsWith(lowerNotEndsWithString)) {
-            endsWithMatch = true;
-            break;
-          }
-        }
-        // If it ends with any "not ends with" item, filter it out
-        meetsTargetUrlNotEndsWithFilter = !endsWithMatch;
-        if (!meetsTargetUrlNotEndsWithFilter) debugLog(`  Filtered out placement (Target URL field ends with excluded strings): ${placement.targetUrl}`)
-      } else {
-        // Filter is enabled but list is empty - skip filter (allow all)
-        debugLog(`  Target URL Not Ends With filter enabled but list is empty - skipping filter`)
-      }
-    }
-
-    return meetsImpressionsThreshold && meetsClicksThreshold && meetsCostThreshold && meetsConversionsThreshold && meetsPlacementTypeFilter &&
-      meetsPlacementContainsFilter && meetsPlacementNotContainsFilter &&
-      meetsDisplayNameContainsFilter && meetsDisplayNameNotContainsFilter &&
-      meetsTargetUrlContainsFilter && meetsTargetUrlNotContainsFilter &&
-      meetsTargetUrlEndsWithFilter && meetsTargetUrlNotEndsWithFilter;
+    return meetsPlacementTypeFilter &&
+      meetsWantedPlacementFilter && meetsWantedDisplayNameFilter &&
+      meetsWantedTargetUrlFilter && meetsWantedTldsFilter;
   });
 }
 
