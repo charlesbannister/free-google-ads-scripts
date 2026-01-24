@@ -5,7 +5,7 @@
  * View the script at https://shabba.io/script/7
 **/
 
-// Template: https://docs.google.com/spreadsheets/d/1MvCwzNCOIG3AO34b5yVe5VjcNFDwdvhCJdhrZQRXz58/edit?gid=528576320#gid=528576320
+// File > Make a copy or visit https://docs.google.com/spreadsheets/d/1MvCwzNCOIG3AO34b5yVe5VjcNFDwdvhCJdhrZQRXz58/copy
 let INPUT_SHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
 
 

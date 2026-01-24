@@ -10,7 +10,7 @@
 
 // Query builder: https://developers.google.com/google-ads/api/fields/v16/ad_group_ad_asset_view_query_builder
 
-//Template Sheet (click to make a copy): https://docs.google.com/spreadsheets/d/1yEBBiX4w4-RCTICtDy-YBoe-aVghDOJc0uWLmCsuEX4/copy
+// File > Make a copy or visit https://docs.google.com/spreadsheets/d/1yEBBiX4w4-RCTICtDy-YBoe-aVghDOJc0uWLmCsuEX4/copy
 const SPREADSHEET_URL = 'YOUR_SPREADSHEET_URL_HERE';
 
 const DEBUG_MODE = true; // Set to false to reduce logging
