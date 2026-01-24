@@ -11,7 +11,7 @@ Create multiple **account-level search term reports** with custom filters and 6 
 | **Difficulty** | Easy |
 | **Schedule** | Daily |
 | **Makes Changes** | No |
-| **Last Updated** | 2026-01-23 |
+| **Last Updated** | 2024-02 |
 
 ## Links
 

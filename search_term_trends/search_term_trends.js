@@ -6,6 +6,8 @@
  * More scripts at https://shabba.io
 **/
 
+// Template: https://docs.google.com/spreadsheets/d/1RQn6LN1H8shjKbZqbGpgmxPVjwWe-y4Pwf7ujIbWnM4
+// File > Make a copy or visit https://docs.google.com/spreadsheets/d/1RQn6LN1H8shjKbZqbGpgmxPVjwWe-y4Pwf7ujIbWnM4/copy
 let INPUT_SHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
 
 
