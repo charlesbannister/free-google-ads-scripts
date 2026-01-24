@@ -127,3 +127,6 @@ As you make edits, ALWAYS check for old, defunct code and delete it.
 As I make changes, update the associated README file if it exists with the changes so that it's always up to date.
 
 To see whether the script is running in preview mode, use AdsApp.getExecutionInfo().isPreview().
+
+
+Remove (and never add) redundant inline comments that just restate what the code does.

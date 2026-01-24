@@ -1,0 +1,5 @@
+---
+alwaysApply: false
+---
+When you're asked to update the shared version, that will be the version that does not have dev in the name. The shared version will have a placeholder where the spreadsheet URL goes. Debug mode will be set to false and any development variables will be set to false as well. Or at least set in a way that means the script runs fully and without restriction. 
+In order to achieve this, you should run a command to copy the dev script into a new file, which is the main shared script, also known as the production version, and then update the spreadsheet URL, debug mode, and anything else it needs updating, including the version. 

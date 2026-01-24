@@ -1,0 +1,11 @@
+---
+alwaysApply: false
+---
+Always apply when the file is in a /tests folder.
+When asked to create a Google Ads Script test file, it will need a main() function and then to call another function which we're testing.
+The file should do the bare minimum to test the function. Only include variables needed to test the functionality.
+Include DEBUG_MODE which is set to true, then ensure logs are outputted to see what's happening.
+A single example should be included unless told otherwise. You can ask the user for an example if needed.
+We want to pass in as much info as possible e.g. ids Vs grabbing those IDs from reports/the api. This ensures single responsibility and a more testable script.
+
+Always check whether in preview mode (AdsApp.getExecutionInfo().isPreview();) then ONLY run in preview mode. Exit early if not in preview mode. This is to prevent the user accidentally running in live mode and making unwanted changes.
