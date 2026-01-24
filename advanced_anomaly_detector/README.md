@@ -47,4 +47,4 @@ Once you've got the URL, add it to the top of the script by editing the `SLACK_T
 
 ## What if I have suggestions?
 
-Please let us know! Hearing your pain points is the number one way we can make improvements.
+Please let me know! Hearing your pain points is the number one way I can make improvements.

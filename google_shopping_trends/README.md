@@ -41,4 +41,4 @@ Don't forget you can install the same script multiple times, just update the She
 
 ## What if I have suggestions?
 
-Please let us know! Hearing your pain points is the number one way we can make improvements.
+Please let me know! Hearing your pain points is the number one way I can make improvements.

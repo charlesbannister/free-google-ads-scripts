@@ -6,6 +6,7 @@
  * 
 **/
 
+// File > Make a copy or visit https://docs.google.com/spreadsheets/d/1L6ty0u7OtD3Ed5h4SBN4mCwkbAqYsaw_18kOLQDr6Tk/copy
 let INPUT_SHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
 
 

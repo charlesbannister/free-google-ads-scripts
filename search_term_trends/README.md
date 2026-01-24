@@ -44,4 +44,4 @@ The only limit is the script runtime of 30 minutes and the capacity of Google Sh
 
 ## Have Suggestions?
 
-Please let us know! Hearing your pain points is the number one way we can make improvements.
+Please let me know! Hearing your pain points is the number one way I can make improvements.
