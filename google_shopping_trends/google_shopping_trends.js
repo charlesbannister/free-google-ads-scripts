@@ -6,6 +6,7 @@
 **/
 
 // Template: https://docs.google.com/spreadsheets/d/1oxPn_cd-2lm5nKUof7GMgDDgBrMjfm2ZQOB3kNmgkWU/
+// Template: https://docs.google.com/spreadsheets/d/1oxPn_cd-2lm5nKUof7GMgDDgBrMjfm2ZQOB3kNmgkWU
 // File > Make a copy or visit https://docs.google.com/spreadsheets/d/1oxPn_cd-2lm5nKUof7GMgDDgBrMjfm2ZQOB3kNmgkWU/copy
 let INPUT_SHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
 

@@ -1,101 +1,69 @@
-# Performance Max Placement Exclusions
+# Placement Exclusions - Semi-automated (PMax, Display, YouTube)
 
-This script helps you manage placement exclusions for Performance Max and Display campaigns. It pulls placement data, writes it to a Google Sheet with checkboxes, and adds selected placements to a shared exclusion list. Optionally, it can use ChatGPT to analyze website content and help identify irrelevant placements.
+Identify unwanted placements across Performance Max, Display, and YouTube campaigns. Review in Google Sheets and exclude with checkboxes.
 
-## Quick Start
+## Details
 
-1. **Copy the template sheet**: [Click here to make a copy](https://docs.google.com/spreadsheets/d/18vdejatcc7b3cWLtNGdmpVFoSDQ4JXXvDiVDLRpAUb4/copy)
-2. **Create a shared exclusion list** in Google Ads: Tools & Settings > Shared Library > Placement exclusions
-3. **Add the script** in Google Ads: Bulk actions > Scripts > New script
-4. **Paste the script** and update `SPREADSHEET_URL` with your copied sheet URL
-5. **Configure settings** in your sheet's Settings tab
-6. **Preview the script** to test it works
+| | |
+|---|---|
+| **Category** | Placement Exclusions |
+| **Tags** | Performance Max, Display, YouTube, Placements, Exclusions |
+| **Difficulty** | Intermediate |
+| **Schedule** | Weekly |
+| **Makes Changes** | Optional |
+| **Last Updated** | 2026-01-20 |
+
+## Links
+
+- [Template Spreadsheet](https://docs.google.com/spreadsheets/d/1jG_igH1QGdyBSbeqj2ELxZEg3uOFYd3wcWaQ_eDfY9o)
+- [Script on GitHub](https://raw.githubusercontent.com/charlesbannister/free-google-ads-scripts/refs/heads/master/placement_exclusions/pmax_placement_exclusions.js)
+
+## Overview
+
+This script helps you identify unwanted placements, which you can optionally exclude via checkboxes in a Google Sheet.
+
+**Works across Performance Max, Display, and YouTube campaigns** - all from one script!
+
+## What This Script Does
+
+- 📊 **Generates placement reports** - Pulls placement data from PMax, Display, and YouTube campaigns
+- ✅ **Checkbox-based exclusions** - Review placements in Google Sheets and tick boxes to exclude
+- 🤖 **Optional ChatGPT integration** - Analyze website content to help identify irrelevant placements
+- 📝 **Exclusion logging** - Maintains a log of what's been excluded and when
 
 ## How It Works
 
-1. **Fetches placement data** - Queries Performance Max and Display campaigns for placement information (websites, YouTube videos, mobile apps, Google Products)
-2. **Writes to output sheets** - Creates four output sheets, one per placement type, with checkboxes in the first column
-3. **Optional ChatGPT analysis** - For website placements, ChatGPT can analyze page content to help identify irrelevant sites
-4. **You select what to exclude** - Check the boxes next to placements you want to exclude
-5. **Adds to exclusion list** - On next run, adds all checked placements to your shared exclusion list
+1. The script pulls placement data from your eligible campaigns
+2. Data is written to separate sheets by placement type (Website, YouTube, Mobile App, Google Products)
+3. Review the placements and tick the checkbox for any you want to exclude
+4. Run the script again to apply your exclusions
 
-## Sheets
+## Campaigns Supported
 
-### Settings Sheet
+- ✅ Performance Max campaigns
+- ✅ Display campaigns
+- ✅ YouTube/Video campaigns
 
-Main configuration options:
+## Configuration Options
 
-| Setting                    | Description                                                      |
-| -------------------------- | ---------------------------------------------------------------- |
-| Shared Exclusion List Name | Name of your placement exclusion list in Google Ads (must exist) |
-| Lookback Window (Days)     | How many days back to look for placement data                    |
-| Minimum Impressions        | Only show placements with at least this many impressions         |
-| Minimum Clicks             | Only show placements with at least this many clicks              |
-| Minimum Cost               | Only show placements with at least this cost                     |
-| Maximum Conversions        | Exclude placements with more than this many conversions          |
-| Max Results                | Limit the number of results (0 = no limit)                       |
-| Campaign Name Contains     | Filter to campaigns containing this text                         |
-| Campaign Name Not Contains | Exclude campaigns containing this text                           |
-| Enabled Campaigns Only     | Checkbox to only include enabled campaigns                       |
+| Setting | Description |
+|---------|-------------|
+| `Shared Exclusion List Name` | Name of the shared exclusion list to add placements to |
+| `Lookback Window (Days)` | Number of days of data to analyze |
+| `Minimum Impressions` | Only show placements with impressions above this |
+| `Minimum Clicks` | Only show placements with clicks above this |
+| `Minimum Cost` | Only show placements with cost above this |
+| `Maximum Conversions` | Only show placements with conversions below this |
+| `Enabled Campaigns Only` | Whether to only include enabled campaigns |
 
-**Placement Type Filters** - Enable/disable each placement type (YouTube, Website, Mobile App, Google Products) and optionally enable automation per type.
+## Features
 
-### Settings: Placement Filters Sheet
+- **Placement type sheets** - Separate output sheets for Website, YouTube, Mobile App, and Google Products
+- **Automated mode** - Optionally pre-tick checkboxes based on your rules
+- **Campaign name filters** - Filter by campaign name contains/not contains
+- **Placement filters** - Filter by display name, target URL, and TLDs
+- **ChatGPT integration** - Optional AI analysis of website content
 
-Filter placements using text matching lists. Each column has an enable checkbox at the top:
+## What if I have suggestions?
 
-- **Placement Contains / Not Contains** - Filter by placement ID/URL
-- **Display Name Contains / Not Contains** - Filter by display name
-- **Target URL Contains / Not Contains** - Filter by target URL
-- **Target URL Ends With / Not Ends With** - Filter by URL suffix (useful for TLDs like `.ru`, `.cn`)
-
-### Settings: ChatGPT Sheet
-
-Optional AI-powered website analysis:
-
-| Setting               | Description                                                        |
-| --------------------- | ------------------------------------------------------------------ |
-| Enable ChatGPT        | Turn ChatGPT integration on/off                                    |
-| API Key               | Your OpenAI API key                                                |
-| Use Cached Responses  | Reuse previous ChatGPT responses for the same URLs                 |
-| Prompt                | Custom prompt for ChatGPT to analyze website content               |
-| Response Contains     | Flag placements where ChatGPT response contains these terms        |
-| Response Not Contains | Flag placements where ChatGPT response doesn't contain these terms |
-
-### Output Sheets
-
-Four output sheets, one per placement type:
-
-| Sheet                      | ChatGPT Column | Notes                                             |
-| -------------------------- | -------------- | ------------------------------------------------- |
-| Output: Website            | ✅ Yes         | Website placements                                |
-| Output: YouTube            | ✅ Yes         | YouTube video placements                          |
-| Output: Mobile Application | ❌ No          | Mobile app placements (app IDs can't be analyzed) |
-| Output: Google Products    | ❌ No          | Google Products placements                        |
-
-**Tab colors**:
-
-- 🟢 **Green** - Sheet has placement results
-- 🔴 **Red** - No results found for this placement type
-
-### LLM Responses Cache Sheet
-
-Stores cached ChatGPT responses to avoid repeated API calls for the same URLs.
-
-## Script Configuration
-
-Variables at the top of the script:
-
-| Variable               | Description                                                            |
-| ---------------------- | ---------------------------------------------------------------------- |
-| `SPREADSHEET_URL`      | Your Google Sheet URL                                                  |
-| `DEBUG_MODE`           | Set to `true` for detailed logging                                     |
-| `ONLY_PROCESS_CHANGES` | Set to `true` to skip fetching new data and only process checked boxes |
-
-## Important Notes
-
-- **Metrics limitation**: The `performance_max_placement_view` resource only supports impressions. Clicks, cost, and conversions will show as 0 for PMax placements (Display placements have full metrics).
-- **Google domains**: Google-owned domains (youtube.com, gmail.com, etc.) cannot be excluded due to policy and are automatically filtered out.
-- **Shared exclusion list**: Must be created in Google Ads before running the script.
-- **Mobile app exclusions**: Mobile apps require bulk upload to exclude and will be noted in the sheet.
-- **ChatGPT API costs**: Using ChatGPT will incur OpenAI API costs based on your usage.
+Please let me know! Hearing your pain points is the number one way I can make improvements.

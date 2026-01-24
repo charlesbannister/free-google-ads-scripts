@@ -29,11 +29,10 @@
 // 6. Preview the script! (You'll be prompted to authorise the first time it runs)
 
 // --- Configuration ---
-const SPREADSHEET_URL = 'YOUR_SPREADSHEET_URL_HERE';
 
-// The Google Sheet URL where placement data will be written
-// Click the link to make a copy:
-// https://docs.google.com/spreadsheets/d/1jG_igH1QGdyBSbeqj2ELxZEg3uOFYd3wcWaQ_eDfY9o/copy
+// Template: https://docs.google.com/spreadsheets/d/1jG_igH1QGdyBSbeqj2ELxZEg3uOFYd3wcWaQ_eDfY9o
+// File > Make a copy or visit https://docs.google.com/spreadsheets/d/1jG_igH1QGdyBSbeqj2ELxZEg3uOFYd3wcWaQ_eDfY9o/copy
+const SPREADSHEET_URL = 'YOUR_SPREADSHEET_URL_HERE';
 
 
 const DEBUG_MODE = false;

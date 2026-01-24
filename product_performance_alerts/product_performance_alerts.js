@@ -7,6 +7,7 @@
 * @version: 1.0.0
 ***************************************************/
 
+// Template: https://docs.google.com/spreadsheets/d/1hxdVWZ8LPZzZEfevniOvmwYhIdrtgK6cAb5QQWUQCv4
 // File > Make a copy or visit https://docs.google.com/spreadsheets/d/1hxdVWZ8LPZzZEfevniOvmwYhIdrtgK6cAb5QQWUQCv4/copy
 let INPUT_SHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
 
