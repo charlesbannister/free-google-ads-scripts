@@ -9,7 +9,8 @@
  - 1.0.7 - added catch for multiple bid updates per run.
  ***************************************************/
 
-
+// Template: https://docs.google.com/spreadsheets/d/1RjDClzOKNoe7_5JZwCudllh4objhE73B-NAaTpGHMxc
+// File > Make a copy or visit https://docs.google.com/spreadsheets/d/1RjDClzOKNoe7_5JZwCudllh4objhE73B-NAaTpGHMxc/copy
 let INPUT_SHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
 
 var INPUT_TAB_NAME = "Settings";
