@@ -1,6 +1,6 @@
 /**
  * Keyword Discovery Script
- * @author Charles Bannister
+ * @author Charles Bannister of shabba.io
  * Surface new keyword opportunities
  * Purchased from shabba.io and not for resale or redistribution - thanks!
  * @version 1.0.0

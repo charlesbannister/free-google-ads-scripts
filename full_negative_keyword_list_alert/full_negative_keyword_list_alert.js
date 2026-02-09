@@ -1,7 +1,7 @@
 /*
 Name: Negative Keyword List Full Checker
 Summary: Checks for full shared negative keyword lists and alerts once via email
-@Author: Charles Bannister
+@Author: Charles Bannister of shabba.io
 More scripts at https://shabba.io
 Version: 1.0.0
 */

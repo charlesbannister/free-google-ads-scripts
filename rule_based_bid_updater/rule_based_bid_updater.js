@@ -3,6 +3,7 @@
 * Update bids for Search (Shopping & Text Ads)
 * Pause/Exclude Keywords/Products
 * @version: 1.0.7
+* @author: Charles Bannister of shabba.io
 * Updates *
  - Labels will be added for raised and lowered bids e.g. "R 9/27". Send an email if there's an error creating a label.
  - 1.0.6 - added Avg. Cpc filter

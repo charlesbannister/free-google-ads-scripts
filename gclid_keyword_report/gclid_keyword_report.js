@@ -2,6 +2,7 @@
  * GCLID Keyword Report
  * Reads GCLIDs from a spreadsheet and enriches them with keyword, ad group, and campaign information
  * Version 1.0.4
+ * @author: Charles Bannister of shabba.io
  */
 
 // Query Builder Links:

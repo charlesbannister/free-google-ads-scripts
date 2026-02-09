@@ -2,6 +2,7 @@
  * RSA Headlines & Descriptions Comparison Script
  * Compares headlines and descriptions of responsive search ads across campaigns
  * Version 1.0.0
+ * @author: Charles Bannister of shabba.io
  */
 
 // Google Ads API Query Builder: https://developers.google.com/google-ads/api/fields/v19/ad_group_ad_query_builder

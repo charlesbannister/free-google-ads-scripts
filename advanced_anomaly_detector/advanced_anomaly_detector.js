@@ -1,6 +1,6 @@
 /**
  * Meet our Advanced Anomaly Detector for Google Ads
- * @author Charles Bannister
+ * @author: Charles Bannister of shabba.io
  * @version 1.2.0
  * Updates:
  *  - 1.1.0: Added weekend notifications option
