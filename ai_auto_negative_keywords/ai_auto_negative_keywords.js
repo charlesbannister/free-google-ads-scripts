@@ -9,7 +9,7 @@
 // --- Configuration ---
 // <<<< PASTE SPREADSHEET URL HERE >>>>
 const SPREADSHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
-const SCRIPT_VERSION = 13;
+const SCRIPT_VERSION = 15;
 
 // <<< /START/ These should all be false >>>
 const DEBUG_MODE = false;
@@ -183,15 +183,17 @@ function runAccount() {
   const apiUrl = API_BASE_URL + spreadsheetId;
   console.log("Fetching rules from: " + apiUrl);
 
-  let rules = fetchRules_(apiUrl);
-  rules = rules.filter(rule => rule.enabled);
+  const fetchedRules = fetchRules_(apiUrl);
+  if (!fetchedRules) return;
+
+  let rules = fetchedRules.filter(rule => rule.enabled);
 
   for (let rule of rules) {
     console.log(`${rule.name} - ${rule.id} - enabled: ${rule.enabled}`);
   }
 
-  if (!rules || rules.length === 0) {
-    console.log("No rules found or error fetching rules. Exiting.");
+  if (rules.length === 0) {
+    console.log("No enabled rules found. Exiting.");
     return;
   }
 
@@ -311,7 +313,7 @@ function _fetchAndParseRulesAttempt_(apiUrl) {
     } else {
       // HTTP Error Case
       // console.log(`HTTP Error during fetch attempt: ${responseCode}`);
-      return { success: false, errorType: 'http', responseCode: responseCode, responseBody: responseBody, responseCode };
+      return { success: false, errorType: 'http', responseCode, responseBody };
     }
 
   } catch (fetchError) {
@@ -362,7 +364,8 @@ function processRule_(rule, spreadsheet, globalEmailRecipients = []) {
   }
 
   // --- 3. Execute Report ---
-  const regularRows = _executeReport_(gaqlQuery, rule.name, maxSearchTerms);
+  let regularRows = _executeReport_(gaqlQuery, rule.name, maxSearchTerms);
+  if (!regularRows) return;
 
   if (DEBUG_MODE) {
     writeResultsToDebugSheet(regularRows);
@@ -377,8 +380,17 @@ function processRule_(rule, spreadsheet, globalEmailRecipients = []) {
   }
 
   // --- 3c. Get example terms ---
-  const exampleTerms = rule.include_examples ? _fetchExampleTerms_(spreadsheet.getId(), rule.id, regularRows, ruleLevel) : [];
-  // console.log(`Example terms: ${JSON.stringify(exampleTerms, null, 2)}`);
+  let exampleTerms = [];
+  if (rule.include_examples) {
+    const terms = _fetchExampleTerms_(spreadsheet.getId(), rule.id);
+    const entityRows = [];
+    if (terms.length > 0 && ruleLevel !== 'account') {
+      // Keep the live rows for reporting without modifying the Apps Script iterator.
+      while (regularRows.hasNext()) entityRows.push(regularRows.next());
+      regularRows = createIteratorFromItems(entityRows);
+    }
+    exampleTerms = _expandExampleTerms_(terms, entityRows);
+  }
 
 
   // --- 4. Process Rows (Check conditions, collect data/negatives) ---
@@ -478,91 +490,47 @@ function processRule_(rule, spreadsheet, globalEmailRecipients = []) {
   }
 }
 
-/**
- * 
-  * @param {string} spreadsheetId The ID of the Google Spreadsheet
-  * @param {string} ruleId The ID of the rule being processed
-  * @param {Object} regularRows Iterator containing search term data rows
-  * @param {string} ruleLevel The level at which the rule operates ('account' or 'adgroup')
-  * @returns {Array<Object>} Array of example search terms with campaign/ad group data
- */
-function _fetchExampleTerms_(spreadsheetId, ruleId, regularRows, ruleLevel) {
+/** Fetch the optional search terms saved alongside the rule. */
+function _fetchExampleTerms_(spreadsheetId, ruleId) {
   const url = `${EXAMPLE_TERMS_API_BASE_URL}${spreadsheetId}&ruleId=${ruleId}`;
-  console.log(`Fetching example terms from: ${url}`);
-  let response;
   try {
     debugLog(`Fetching example terms from: ${url}`);
-    response = UrlFetchApp.fetch(url);
+    const response = UrlFetchApp.fetch(url);
+    const { exampleTerms } = JSON.parse(response.getContentText());
+    if (!Array.isArray(exampleTerms)) throw new Error('Expected an exampleTerms array.');
+    return exampleTerms.map(item => item?.term).filter(term => typeof term === 'string' && term.trim());
   } catch (error) {
-    console.error(`ERROR fetching example terms: ${error.message}`);
-    console.error(`ERROR fetching example terms: ${error.stack}`);
-    return []; // Return an empty array on error
+    console.warn(`Could not load example terms for rule ${ruleId}: ${error.message}. Continuing with live rows.`);
+    return [];
   }
-  const responseBody = response.getContentText();
-  const data = JSON.parse(responseBody);
-  const exampleTerms = data['exampleTerms'];
-  const exampleTermsArray = exampleTerms.map(term => term.term);
+}
 
-  // Create a copy of regularRows without consuming the original iterator
-  const regularRowsItems = [];
-  while (regularRows.hasNext()) {
-    regularRowsItems.push(regularRows.next());
-  }
-
-  // Create a new iterator for processing example terms
-  const regularRowsCopy = createIteratorFromItems(regularRowsItems);
-
-  // Recreate the original iterator for later use
-  const originalIteratorRestored = createIteratorFromItems(regularRowsItems);
-
-  // Replace the consumed regularRows with our restored version
-  Object.assign(regularRows, originalIteratorRestored);
-
-  // console.log(`Regular rows: ${JSON.stringify(regularRowsItems, null, 2)}`);
-
-  if (ruleLevel === 'account' || !regularRowsCopy.hasNext()) {
-    return exampleTermsArray.map(term => ({
-      term: term,
+/** Attach the campaign and ad group context needed for entity-level rules. */
+function _expandExampleTerms_(terms, entityRows) {
+  if (entityRows.length === 0) {
+    return terms.map(term => ({
+      term,
       campaignName: null,
       campaignId: null,
       adGroupName: null,
       adGroupId: null
     }));
   }
-  let entityData = [];
-  // get campaign name, id and ad group name, id from regularRows
-  while (regularRowsCopy.hasNext()) {
-    const row = regularRowsCopy.next();
-    entityData.push({
+
+  const entities = new Map();
+  for (const row of entityRows) {
+    const entity = {
       campaignName: row['campaign.name'],
       campaignId: row['campaign.id'],
       adGroupName: row['ad_group.name'],
       adGroupId: row['ad_group.id']
-    });
-  }
-  entityData = [...new Set(entityData.map(JSON.stringify))].map(JSON.parse);
-
-  // for each example term, create a row for each campaign or ad group
-  let exampleTermRows = [];
-  for (let exampleTerm of exampleTermsArray) {
-    for (let entity of entityData) {
-      let exampleTermData = {
-        term: exampleTerm,
-        campaignName: entity.campaignName,
-        campaignId: entity.campaignId,
-        adGroupName: entity.adGroupName,
-        adGroupId: entity.adGroupId,
-        termType: 'EXAMPLE'
-      }
-      // add only if the object isn't already in the array
-      const found = exampleTermRows.find(row => row.term === exampleTermData.term && row.campaignName === exampleTermData.campaignName && row.adGroupName === exampleTermData.adGroupName);
-      if (!found) {
-        exampleTermRows.push(exampleTermData);
-      }
-    }
+    };
+    const key = JSON.stringify([entity.campaignName, entity.adGroupName]);
+    if (!entities.has(key)) entities.set(key, entity);
   }
 
-  return exampleTermRows;
+  const entityData = [...entities.values()];
+  return [...new Set(terms)].flatMap(term => entityData.map(entity => ({ term, ...entity })));
 }
 
 /**
@@ -573,6 +541,7 @@ function _fetchExampleTerms_(spreadsheetId, ruleId, regularRows, ruleLevel) {
 function createIteratorFromItems(items) {
   let index = 0;
   return {
+    totalNumEntities: () => items.length,
     hasNext: function () {
       return index < items.length;
     },
@@ -1123,8 +1092,8 @@ function processMatchedTerm_(params) {
     });
     debugLog(`Negative status: ${negativeStatus}`);
 
-    // Collect negatives for auto-apply if applicable - only standard and example terms can be negated
-    if (params.autoApply && (params.termType === 'STANDARD' || params.termType === 'EXAMPLE' || params.termType === 'PMAX')) {
+    // Performance Max terms are reported only.
+    if (params.autoApply && (params.termType === 'STANDARD' || params.termType === 'EXAMPLE')) {
       collectNegativeKeywords_({
         searchTerm: params.searchTerm,
         campaignId: params.campaignId,
@@ -3633,7 +3602,7 @@ function _fetchPmaxData_(ruleName, lookbackDays, entityConditions, maxSearchTerm
  * @returns {String} The AI response
  */
 function getAiResponseString_(searchTerm, rule, campaignName, adGroupName, campaignId, adGroupId) {
-  if (rule.ai_prompt.trim() === '') {
+  if (typeof rule.ai_prompt !== 'string' || rule.ai_prompt.trim() === '') {
     return "N/A (no prompt defined)";
   }
   const prompt = interpolatePrompt(searchTerm, rule, campaignName, adGroupName, campaignId, adGroupId);

@@ -17,8 +17,12 @@ This script supports Dynamic Search Ads (DSAs), Shopping Ads, Performance Max, a
 - **Comprehensive Reporting**: Track results across different lookback windows with detailed KPIs
 - **Perfect for Brand Campaigns**: Stricter matching control for brand protection
 
+## Version 15
+
+If the rules service is unavailable, the script stops before opening the spreadsheet. If a Google Ads report fails, the rule keeps its last report and applies no negatives. Missing example terms no longer interrupt the live search terms report, and Performance Max terms appear in reports with auto-apply enabled.
+
 ## Resources
 
-- **Public GitHub Script**: https://gist.github.com/charlesbannister/afa9cd70d3b4a010e4fc6ef5d9ae1c3b
+- [Current standalone script](https://raw.githubusercontent.com/charlesbannister/free-google-ads-scripts/refs/heads/master/ai_auto_negative_keywords/ai_auto_negative_keywords.js)
 - **Google Sheet Template**: https://docs.google.com/spreadsheets/d/1xwdogT2HiHV_Gx9pdY4rErhLSm7Qrooj6wbikEjf-G0/edit?gid=0#gid=0
 - **Setup Interface**: https://autoneg.shabba.io
