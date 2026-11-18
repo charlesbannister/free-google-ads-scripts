@@ -10,12 +10,16 @@ This script supports Dynamic Search Ads (DSAs), Shopping Ads, Performance Max, a
 
 ### Key Features
 
-- **Auto Negative Keywords (Positive Keywords)**: Set up rules to automatically exclude irrelevant terms
+- **Custom words and keyword protection**: Check search terms against your own words and protect terms close to your campaign or ad group keywords
 - **Approx. Match Setting**: Intelligent matching that won't exclude legitimate variations (e.g., "banksie" when targeting "banksy")
 - **Search Term Alerts**: Get notified when performance metrics exceed thresholds
 - **AI/LLM Integration**: Let AI review search terms and suggest broad match negatives or relevance scoring
 - **Comprehensive Reporting**: Track results across different lookback windows with detailed KPIs
 - **Perfect for Brand Campaigns**: Stricter matching control for brand protection
+
+## Version 16
+
+Use **Protect keywords** on a campaign or ad-group rule to keep search terms close to an enabled keyword. You can use it alongside **Custom words**. The script reads keywords once per account run. It skips terms it cannot compare, including Performance Max terms, and keeps scoped keyword protection report-only when a shared negative list is selected.
 
 ## Version 15
 

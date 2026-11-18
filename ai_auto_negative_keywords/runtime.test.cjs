@@ -4,7 +4,7 @@ const { join } = require('node:path');
 const { test } = require('node:test');
 const { runInNewContext } = require('node:vm');
 
-const rulesUrl = 'https://autoneg.shabba.io/api/rules?sheetId=demo-sheet';
+const rulesUrl = 'https://autoneg.shabba.io/api/rules?sheetId=demo-sheet&scriptVersion=16';
 const examplesUrl = 'https://autoneg.shabba.io/api/example-terms?sheetId=demo-sheet&ruleId=101';
 const script = readFileSync(join(__dirname, 'ai_auto_negative_keywords.js'), 'utf8')
   .replace('YOUR_SPREADSHEET_URL_HERE', 'https://docs.google.com/spreadsheets/d/demo-sheet/edit');
@@ -120,8 +120,8 @@ function reportRuntime(items, fetch) {
   return { tables, runtime, spreadsheet: reportSheet(tables) };
 }
 
-test('v15 advertises an update to existing v14 beta installs', () => {
-  assert.equal(makeRuntime({}).script.SCRIPT_VERSION, 15);
+test('v16 advertises an update to v15 installs', () => {
+  assert.equal(makeRuntime({}).script.SCRIPT_VERSION, 16);
 });
 
 test('failed rule fetch exits before opening the spreadsheet', () => {
@@ -243,4 +243,123 @@ test('explicitly included example terms remain eligible for auto-apply', () => {
   });
 
   assert.deepEqual(Array.from(result.negativesByAccount.terms), ['Example term']);
+});
+
+function keywordRule(scope, overrides = {}) {
+  return rule({
+    level: scope,
+    automated_targeting_keywords: { enabled: true, scope, threshold: 70 },
+    ...overrides,
+  });
+}
+
+function keywordRuntime({ rules, searchRows, keywordRows, failKeywordQuery = false, examples }) {
+  const tables = [];
+  const queries = [];
+  const { script: runtime, logs } = makeRuntime({
+    UrlFetchApp: { fetch(url) {
+      if (url === rulesUrl) return response(200, JSON.stringify(rules));
+      if (url === examplesUrl && examples) return response(200, JSON.stringify({ exampleTerms: examples }));
+      throw Error(`Unexpected request ${url}`);
+    } },
+    SpreadsheetApp: { openById: () => reportSheet(tables) },
+    AdsApp: {
+      currentAccount: account,
+      getExecutionInfo: () => ({ isPreview: () => false }),
+      report(query) {
+        queries.push(query);
+        if (query.includes('FROM keyword_view')) {
+          if (failKeywordQuery) throw Error('Keyword query unavailable');
+          return { rows: () => rows(keywordRows) };
+        }
+        if (query.includes('FROM search_term_view')) return { rows: () => rows(searchRows) };
+        throw Error(`Unexpected query ${query}`);
+      },
+    },
+    Utilities: { formatDate: () => '2026-11-18' },
+  });
+  return { runtime, logs, tables, queries, spreadsheet: reportSheet(tables) };
+}
+
+function searchTerm(term, adGroupId = '200', campaignId = '100') {
+  return { ...sampleSearchRow(), 'search_term_view.search_term': term, 'campaign.id': campaignId, 'ad_group.id': adGroupId };
+}
+
+const acmeKeyword = {
+  'campaign.id': '100', 'ad_group.id': '201', 'ad_group_criterion.keyword.text': 'Acme Plumbing',
+};
+
+test('campaign keyword protection runs once per account and skips Performance Max', () => {
+  const { runtime, tables, queries } = keywordRuntime({
+    rules: [keywordRule('campaign', { text_conditions: { sections: [{ conditions: [] }] } }), keywordRule('adgroup', { id: 102 })],
+    searchRows: [searchTerm('ACME plumbing services'), searchTerm('plumbing acme'), searchTerm('acmee plumbing'), searchTerm('unrelated job')],
+    keywordRows: [acmeKeyword],
+  });
+
+  runtime.runAccount();
+  assert.equal(queries.filter(query => query.includes('FROM keyword_view')).length, 1);
+  assert.equal(queries.filter(query => query.includes('FROM search_term_view')).length, 2);
+  assert.ok(queries.every(query => !query.includes('campaign_search_term_insight')));
+  assert.deepEqual(Array.from(tables[0].slice(1), row => row[0]), ['unrelated job']);
+});
+
+test('ad-group protection scopes keywords and keeps custom words alongside them', () => {
+  const { runtime, tables, spreadsheet } = keywordRuntime({
+    searchRows: [searchTerm('ACME plumbing', '200'), searchTerm('ACME plumbing', '201'), searchTerm('trusted brand', '200'), searchTerm('jobs', '999')],
+    keywordRows: [acmeKeyword, { ...acmeKeyword, 'ad_group.id': '200', 'ad_group_criterion.keyword.text': 'plumbing repairs' }],
+  });
+  runtime.processRule_(keywordRule('adgroup', {
+    text_conditions: { sections: [{ conditions: [{ text: 'trusted', matchType: 'contains' }] }] },
+  }), spreadsheet);
+  assert.deepEqual(Array.from(tables[0].slice(1), row => row[0]), ['ACME plumbing']);
+});
+
+test('a failed or empty keyword query leaves the previous report and skips mutations', () => {
+  for (const failKeywordQuery of [true, false]) {
+    const { runtime, queries, tables, logs, spreadsheet } = keywordRuntime({
+      failKeywordQuery, searchRows: [searchTerm('jobs')], keywordRows: [],
+    });
+    runtime.processRule_(keywordRule('campaign', { auto_apply: true }), spreadsheet);
+    assert.equal(queries.length, 1);
+    assert.equal(tables.length, 0);
+    assert.ok(logs.some(message => message.includes('keyword protection')));
+  }
+});
+
+test('legacy automated settings without scope preserve the existing custom-only rule', () => {
+  const { runtime, queries, tables, spreadsheet } = keywordRuntime({
+    searchRows: [searchTerm('unrelated job')], keywordRows: [acmeKeyword],
+  });
+  runtime.processRule_(rule({ automated_targeting_keywords: { enabled: true, threshold: 70 } }), spreadsheet);
+  assert.ok(queries.every(query => !query.includes('FROM keyword_view')));
+  assert.deepEqual(Array.from(tables[0].slice(1), row => row[0]), ['unrelated job']);
+});
+
+test('keyword protection reports without writing to a shared negative list', () => {
+  const { runtime, tables, logs, spreadsheet } = keywordRuntime({
+    searchRows: [searchTerm('unrelated job')], keywordRows: [acmeKeyword],
+  });
+  runtime.processRule_(keywordRule('campaign', { auto_apply: true, negative_list_name: 'Shared list' }), spreadsheet);
+  assert.ok(logs.some(message => message.includes('shared negative list')));
+  assert.ok(tables[0][1].includes('No (Auto Apply Disabled)'));
+});
+
+test('explicit but invalid keyword scopes skip the rule', () => {
+  for (const scope of ['account', null, 'adgroup']) {
+    const { runtime, queries, tables, spreadsheet } = keywordRuntime({
+      searchRows: [searchTerm('unrelated job')], keywordRows: [acmeKeyword],
+    });
+    runtime.processRule_(keywordRule(scope, { level: 'campaign' }), spreadsheet);
+    assert.equal(queries.length, 0);
+    assert.equal(tables.length, 0);
+  }
+});
+
+test('keyword protection applies to example terms too', () => {
+  const { runtime, tables, spreadsheet } = keywordRuntime({
+    searchRows: [searchTerm('unrelated job', '201')], keywordRows: [acmeKeyword],
+    examples: [{ term: 'acme plumbing' }, { term: 'another example' }],
+  });
+  runtime.processRule_(keywordRule('adgroup', { include_examples: true }), spreadsheet);
+  assert.deepEqual(Array.from(tables[0].slice(1), row => row[0]), ['unrelated job', 'another example']);
 });

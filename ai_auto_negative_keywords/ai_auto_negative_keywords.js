@@ -9,7 +9,7 @@
 // --- Configuration ---
 // <<<< PASTE SPREADSHEET URL HERE >>>>
 const SPREADSHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
-const SCRIPT_VERSION = 15;
+const SCRIPT_VERSION = 16;
 
 // <<< /START/ These should all be false >>>
 const DEBUG_MODE = false;
@@ -180,7 +180,7 @@ function runAccount() {
 
   console.log(`Spreadsheet Url: ${SPREADSHEET_URL}`);
   console.log(`Admin Panel Url: ${ADMIN_PANEL_BASE_URL + spreadsheetId}\n`);
-  const apiUrl = API_BASE_URL + spreadsheetId;
+  const apiUrl = `${API_BASE_URL}${spreadsheetId}&scriptVersion=${SCRIPT_VERSION}`;
   console.log("Fetching rules from: " + apiUrl);
 
   const fetchedRules = fetchRules_(apiUrl);
@@ -211,10 +211,17 @@ function runAccount() {
   rules = sortRulesByLastRuntime_(rules, spreadsheet);
   console.log(`Rules sorted by last runtime. Rules with no previous runs will be processed first.`);
 
+  // Share the keyword report across the account's eligible rules, including failures.
+  let keywordIndex;
+  const getKeywordIndex = () => {
+    if (keywordIndex === undefined) keywordIndex = _loadProtectionKeywords_();
+    return keywordIndex;
+  };
+
   rules.forEach(function (rule) {
     try {
       console.log(`\nProcessing rule: '${rule.name}'`);
-      processRule_(rule, spreadsheet, globalEmailRecipients);
+      processRule_(rule, spreadsheet, globalEmailRecipients, getKeywordIndex);
       console.log("Finished processing rule: '" + rule.name + "'");
     } catch (e) {
       console.log("ERROR processing rule '" + rule.name + "' (ID: " + rule.id + "): " + e.stack);
@@ -332,9 +339,20 @@ function _fetchAndParseRulesAttempt_(apiUrl) {
  * @param {Array<string>} globalEmailRecipients Optional global email recipients from Settings sheet.
  * @private
  */
-function processRule_(rule, spreadsheet, globalEmailRecipients = []) {
+function processRule_(rule, spreadsheet, globalEmailRecipients = [], getKeywordIndex = _loadProtectionKeywords_) {
   const ruleLevel = (rule.level || 'campaign').toLowerCase();
-  const autoApply = rule.auto_apply === true;
+  const targeting = rule.automated_targeting_keywords;
+  const usesKeywordProtection = targeting?.enabled === true && Object.prototype.hasOwnProperty.call(targeting, 'scope');
+  if (usesKeywordProtection && ((targeting.scope !== 'campaign' && targeting.scope !== 'adgroup') || targeting.scope !== ruleLevel)) {
+    console.warn(`Skipping keyword protection rule "${rule.name}": keyword scope does not match the rule level.`);
+    return;
+  }
+
+  const usesSharedNegativeList = usesKeywordProtection && Boolean(rule.negative_list_name);
+  const autoApply = rule.auto_apply === true && !usesSharedNegativeList;
+  if (rule.auto_apply === true && usesSharedNegativeList) {
+    console.warn(`Skipping auto-apply for "${rule.name}": a shared negative list can affect entities outside this rule's keyword scope.`);
+  }
   const generateReport = rule.generate_report === true;
   const sendEmail = rule.send_email === true;
   const maxSearchTerms = rule.max_search_terms ? parseInt(rule.max_search_terms) : null;
@@ -353,6 +371,25 @@ function processRule_(rule, spreadsheet, globalEmailRecipients = []) {
   // --- 1. Parse Conditions ---
   const conditions = _parseRuleConditions_(rule);
   if (!conditions) return; // Stop if parsing failed
+
+  let keywordProtection = null;
+  if (usesKeywordProtection) {
+    const keywords = getKeywordIndex()?.[targeting.scope];
+    if (!keywords?.size) {
+      console.warn(`Skipping keyword protection rule "${rule.name}": no enabled keywords are available.`);
+      return;
+    }
+    const threshold = Number(targeting.threshold);
+    keywordProtection = {
+      keywords,
+      threshold: threshold > 0 && threshold <= 100 ? threshold : 70,
+      skipped: 0,
+    };
+    // The editor can save an empty section when keyword matching is the only text check.
+    if (!conditions.textConditions?.sections?.some(section => section?.conditions?.length)) {
+      conditions.textConditions = null;
+    }
+  }
 
   // --- 2. Build GAQL Query ---
   let gaqlQuery;
@@ -373,9 +410,9 @@ function processRule_(rule, spreadsheet, globalEmailRecipients = []) {
 
   // --- 3b. Try to get PMAX data if this is a campaign-level rule ---
   let pmaxRows = [];
-  if (ruleLevel === 'campaign') {
+  if (ruleLevel === 'campaign' && !keywordProtection) {
     pmaxRows = _fetchPmaxData_(rule.name, rule.lookback_days, conditions.entityConditions, maxSearchTerms);
-  } else {
+  } else if (!keywordProtection) {
     console.warn(`Rule "${rule.name}" is at ${ruleLevel} level. PMAX search terms will only be fetched for campaign-level rules.`);
   }
 
@@ -403,8 +440,14 @@ function processRule_(rule, spreadsheet, globalEmailRecipients = []) {
     textConditions: conditions.textConditions,
     pmaxRows: pmaxRows,
     rule: rule,
-    exampleTerms: exampleTerms
+    exampleTerms: exampleTerms,
+    keywordProtection,
   });
+
+  if (keywordProtection?.skipped) {
+    console.warn(`Keyword protection rule "${rule.name}" skipped ${keywordProtection.skipped} terms without usable keywords or entity information.`);
+    if (processingResult.stats.checked === keywordProtection.skipped) return;
+  }
 
   console.log(`Finished processing rows for rule "${rule.name}". Checked: ${processingResult.stats.checked}, Matched Filters: ${processingResult.stats.matched}, Negatives Collected: ${processingResult.stats.collectedForNeg}.`);
 
@@ -659,7 +702,7 @@ function _executeReport_(gaqlQuery, ruleName, maxSearchTerms = null) {
  *         Collected data and stats.
  */
 function _processReportRows_(params) {
-  const { regularRows, ruleLevel, autoApply, generateReport, performanceConditions, textConditions, pmaxRows, rule, exampleTerms } = params;
+  const { regularRows, ruleLevel, autoApply, generateReport, performanceConditions, textConditions, pmaxRows, rule, exampleTerms, keywordProtection } = params;
 
   // Initialize result containers
   const result = {
@@ -688,10 +731,10 @@ function _processReportRows_(params) {
   result.negativesByAccount = {};
 
   // Process regular search term rows
-  _processRegularRows_(regularRows, ruleLevel, autoApply, generateReport, performanceConditions, textConditions, STATUS, result, rule);
+  _processRegularRows_(regularRows, ruleLevel, autoApply, generateReport, performanceConditions, textConditions, STATUS, result, rule, keywordProtection);
 
   // Process example terms
-  _processExampleTerms_(exampleTerms, ruleLevel, autoApply, generateReport, textConditions, STATUS, result, rule);
+  _processExampleTerms_(exampleTerms, ruleLevel, autoApply, generateReport, textConditions, STATUS, result, rule, keywordProtection);
 
   return result;
 }
@@ -709,7 +752,7 @@ function _processReportRows_(params) {
  * @param {Object} rule The rule object.
  * @private
  */
-function _processRegularRows_(rows, ruleLevel, autoApply, generateReport, performanceConditions, textConditions, STATUS, result, rule) {
+function _processRegularRows_(rows, ruleLevel, autoApply, generateReport, performanceConditions, textConditions, STATUS, result, rule, keywordProtection) {
   console.log(`Processing regular (non-PMAX) report rows for rule level: ${ruleLevel}`);
   if (!rows || !rows.hasNext()) {
     console.log(`No regular (non-PMAX) rows found for rule "${rule.name}". Skipping.`);
@@ -739,11 +782,16 @@ function _processRegularRows_(rows, ruleLevel, autoApply, generateReport, perfor
 
     if (ruleLevel === 'adgroup') {
       if (typeof row['ad_group.id'] === 'undefined' || typeof row['ad_group.name'] === 'undefined') {
+        if (keywordProtection) keywordProtection.skipped++;
         console.warn(`Warning: ad_group.id/name missing in adgroup-level rule row. Term: "${searchTerm}". Skipping.`);
         continue;
       }
       adGroupId = row['ad_group.id'];
       adGroupName = row['ad_group.name'];
+    }
+
+    if (keywordProtection && _skipProtectedTerm_(keywordProtection, ruleLevel === 'campaign' ? campaignId : adGroupId, row['search_term_view.search_term'])) {
+      continue;
     }
 
     // Skip if row doesn't meet conditions
@@ -939,7 +987,7 @@ function obfuscateSearchTerm(searchTerm) {
  * @param {Object} rule The rule object.
  * @private
  */
-function _processExampleTerms_(exampleTerms, ruleLevel, autoApply, generateReport, textConditions, STATUS, result, rule) {
+function _processExampleTerms_(exampleTerms, ruleLevel, autoApply, generateReport, textConditions, STATUS, result, rule, keywordProtection) {
   if (!exampleTerms || exampleTerms.length === 0) {
     console.log(`No example terms found for rule "${rule.name}". Skipping.`);
     return;
@@ -950,6 +998,10 @@ function _processExampleTerms_(exampleTerms, ruleLevel, autoApply, generateRepor
   for (const exampleTerm of exampleTerms) {
     // Add a query_source property to identify this row comes from the regular GAQL query
     result.stats.checked++;
+
+    if (keywordProtection && _skipProtectedTerm_(keywordProtection, ruleLevel === 'campaign' ? exampleTerm.campaignId : exampleTerm.adGroupId, exampleTerm.term)) {
+      continue;
+    }
 
     // Skip if row doesn't meet conditions
     if (!_rowMeetsAllConditions_(exampleTerm, exampleTerm.term, [], textConditions, rule, exampleTerm.campaignName, exampleTerm.adGroupName, exampleTerm.campaignId, exampleTerm.adGroupId)) {
@@ -2876,6 +2928,66 @@ function fuzzyMatchScore(needle, haystack) {
   let result = a.get(needle)
   if (!result) return 0
   return result[0][0] * 100;
+}
+
+function _loadProtectionKeywords_() {
+  const index = { campaign: new Map(), adgroup: new Map() };
+  const compiled = new Map();
+  try {
+    const rows = AdsApp.report(`
+      SELECT campaign.id, ad_group.id, ad_group_criterion.keyword.text
+      FROM keyword_view
+      WHERE campaign.status = ENABLED
+      AND ad_group.status = ENABLED
+      AND ad_group_criterion.status = ENABLED
+      AND ad_group_criterion.negative = FALSE
+    `).rows();
+    while (rows.hasNext()) {
+      const row = rows.next();
+      const text = row['ad_group_criterion.keyword.text'];
+      if (!compiled.has(text)) compiled.set(text, _keywordTokens_(text));
+      const words = compiled.get(text);
+      if (words.length === 0) continue;
+
+      for (const [scope, id] of [['campaign', row['campaign.id']], ['adgroup', row['ad_group.id']]]) {
+        if (id === null || id === undefined || id === '') continue;
+        const key = String(id);
+        if (!index[scope].has(key)) index[scope].set(key, new Set());
+        index[scope].get(key).add(words);
+      }
+    }
+    return index;
+  } catch (error) {
+    console.warn(`Could not load enabled keywords for keyword protection: ${error.message}`);
+    return null;
+  }
+}
+
+function _keywordTokens_(text) {
+  return String(text ?? '').normalize('NFKC').toLowerCase().match(/[\p{L}\p{N}]+/gu) || [];
+}
+
+/** Skip matching terms and any terms which cannot safely be compared. */
+function _skipProtectedTerm_(protection, entityId, searchTerm) {
+  const keywords = protection.keywords.get(String(entityId));
+  const tokens = _keywordTokens_(searchTerm);
+  if (!keywords || tokens.length === 0) {
+    protection.skipped++;
+    return true;
+  }
+
+  const exactWords = new Set(tokens);
+  const wordMatches = new Map();
+  for (const keyword of keywords) {
+    if (keyword.every(word => {
+      if (!wordMatches.has(word)) {
+        wordMatches.set(word, exactWords.has(word) || (word.length >= 4 && tokens.some(token =>
+          token.length >= 4 && fuzzyMatchScore(word, token) >= protection.threshold)));
+      }
+      return wordMatches.get(word);
+    })) return true;
+  }
+  return false;
 }
 
 /**
