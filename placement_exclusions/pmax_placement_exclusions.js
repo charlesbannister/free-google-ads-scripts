@@ -13,7 +13,7 @@
  * writes to sheet with checkboxes for user selection, then excludes the selected placements.
  * YouTube placements (YOUTUBE_CHANNEL, YOUTUBE_VIDEO) are written to the YouTube output tab.
  * Includes optional ChatGPT integration for website content analysis.
- * Version: 2.9.2
+ * Version: 2.9.3
  */
 
 // Google Ads API Query Builder Links:
@@ -461,7 +461,7 @@ function main() {
  * Validates that the spreadsheet URL is configured
  */
 function validateConfig() {
-  if (!SPREADSHEET_URL || SPREADSHEET_URL.includes('PASTE_YOUR_SPREADSHEET_URL_HERE')) {
+  if (!SPREADSHEET_URL || SPREADSHEET_URL.includes('YOUR_SPREADSHEET_URL_HERE')) {
     throw new Error('Please update SPREADSHEET_URL with your actual spreadsheet URL');
   }
 }
@@ -1280,7 +1280,7 @@ function getPlacementGaqlQuery(dateRange, settings, campaignType) {
       conditions.push(`metrics.clicks > ${settings.minimumClicks}`);
     }
     if (settings.minimumCost > 0) {
-      const costMicros = settings.minimumCost * 1000000;
+      const costMicros = Math.round(settings.minimumCost * 1000000); // GAQL needs a whole number of micros
       conditions.push(`metrics.cost_micros > ${costMicros}`);
     }
     if (settings.maximumConversions > 0) {
@@ -1417,7 +1417,7 @@ function calculatePlacementMetrics(placementData) {
     const avgCpc = placement.clicks > 0 ? cost / placement.clicks : 0;
     const convRate = placement.clicks > 0 ? placement.conversions / placement.clicks : 0;
     const cpa = placement.conversions > 0 ? cost / placement.conversions : 0;
-    const roas = placement.conversionsValue > 0 ? placement.conversionsValue / cost : 0;
+    const roas = placement.conversionsValue > 0 && cost > 0 ? placement.conversionsValue / cost : 0;
 
     const transformed = {
       campaignId: placement.campaignId,
@@ -1810,7 +1810,7 @@ function writePlacementDataToSheet(spreadsheet, placementData, settings) {
 
   // Group placements by type
   const placementsByType = {};
-  for (const placement of placementData) {
+  for (const placement of filteredPlacementData) {
     const placementTypeName = getPlacementTypeName(placement.placementType);
     if (!placementTypeName) {
       // Unknown placement type - skip it
@@ -2820,11 +2820,10 @@ function linkSharedListToPMaxCampaigns(listName) {
 
     try {
       // Retrieve currently applied lists to avoid redundant mutation calls
-      const appliedLists = campaign.getExcludedPlacementLists();
+      const appliedListsIterator = getAppliedExcludedPlacementListsIterator(campaign);
       let isListApplied = false;
 
-      if (appliedLists) {
-        const appliedListsIterator = appliedLists.get();
+      if (appliedListsIterator) {
         while (appliedListsIterator.hasNext()) {
           const appliedList = appliedListsIterator.next();
           if (appliedList.getName() === listName) {
@@ -2859,8 +2858,8 @@ function linkSharedListToPMaxCampaigns(listName) {
 
   // Link to Display campaigns
   const displayCampaignIterator = AdsApp.campaigns()
-    .withCondition('AdvertisingChannelType = DISPLAY')
-    .withCondition('Status = ENABLED')
+    .withCondition('campaign.advertising_channel_type = DISPLAY')
+    .withCondition('campaign.status = ENABLED')
     .get();
 
   let displayCampaignsUpdated = 0;
@@ -2874,10 +2873,10 @@ function linkSharedListToPMaxCampaigns(listName) {
 
     try {
       // Retrieve currently applied lists to avoid redundant mutation calls
-      const appliedLists = campaign.getExcludedPlacementLists();
+      const appliedLists = getAppliedExcludedPlacementListsIterator(campaign);
       let isListApplied = false;
 
-      while (appliedLists.hasNext()) {
+      while (appliedLists && appliedLists.hasNext()) {
         const appliedList = appliedLists.next();
         if (appliedList.getId() === excludedPlacementList.getId()) {
           isListApplied = true;
@@ -2911,6 +2910,32 @@ function linkSharedListToPMaxCampaigns(listName) {
 }
 
 /**
+ * Returns an iterator over the placement exclusion lists already applied to a campaign.
+ * Campaign entities expose excludedPlacementLists() (a selector); older code used
+ * getExcludedPlacementLists(). Accepts either, and a selector or an iterator.
+ * @param {Object} campaign - A campaign entity
+ * @returns {Object|null} Iterator with hasNext()/next(), or null if the lists can't be read
+ */
+function getAppliedExcludedPlacementListsIterator(campaign) {
+  let lists = null;
+  if (typeof campaign.excludedPlacementLists === 'function') {
+    lists = campaign.excludedPlacementLists();
+  } else if (typeof campaign.getExcludedPlacementLists === 'function') {
+    lists = campaign.getExcludedPlacementLists();
+  }
+  if (!lists) {
+    return null;
+  }
+  if (typeof lists.hasNext === 'function') {
+    return lists;
+  }
+  if (typeof lists.get === 'function') {
+    return lists.get();
+  }
+  return null;
+}
+
+/**
  * Formats a mobile app placement for exclusion
  * @param {string} placement - The placement ID (e.g., "1-1510189987" for iOS or "2-com.example.app" for Android)
  * @param {string} placementType - The placement type from the report
@@ -2921,7 +2946,8 @@ function formatMobileAppPlacement(placement, placementType) {
     return null;
   }
 
-  const placementStr = String(placement).trim();
+  // Reports can give app IDs with the "mobileapp::" prefix (e.g. "mobileapp::2-com.example.app")
+  const placementStr = String(placement).trim().replace(/^mobileapp::/i, '');
   const typeStr = placementType ? String(placementType).toUpperCase() : '';
 
   // Check if it's a mobile app based on placement type or format

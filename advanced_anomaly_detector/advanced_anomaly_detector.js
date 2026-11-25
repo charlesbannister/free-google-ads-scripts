@@ -1,8 +1,9 @@
 /**
  * Meet our Advanced Anomaly Detector for Google Ads
  * @author: Charles Bannister of shabba.io
- * @version 1.2.0
+ * @version 1.2.1
  * Updates:
+ *  - 1.2.1: Alerts for entities that drop to zero, dates in the account time zone, all rows for this account run
  *  - 1.1.0: Added weekend notifications option
  *  - 1.2.0: Made it possible to run without alert settings (leave the Alert Parameters operator blank)
  * Purchased from shabba.io and not for resale or redistribution - thanks!
@@ -84,6 +85,19 @@ Date.prototype.yyyymmdd = function () {
   return yyyy + (mm[1] ? mm : "0" + mm[0]) + (dd[1] ? dd : "0" + dd[0]); // padding
 };
 
+/**
+ * yyyyMMdd in the account's time zone, falling back to the script's time zone
+ * @param {Date} date
+ * @returns {string}
+ */
+function formatAccountDate(date) {
+  try {
+    return Utilities.formatDate(date, AdsApp.currentAccount().getTimeZone(), 'yyyyMMdd');
+  } catch (e) {
+    return date.yyyymmdd();
+  }
+}
+
 let LOCAL = false;
 if (typeof AdsApp === 'undefined') {
   LOCAL = true;
@@ -98,7 +112,9 @@ function main() {
   if (isMCC()) {
     MccApp.accounts().withIds(ids).withLimit(50).executeInParallel('runRows', 'callBack', JSON.stringify(settings));
   } else {
-    settings = settings[Object.keys(settings)[0]]
+    // Run this account's rows (fall back to the first account ID, as before)
+    const customerId = AdsApp.currentAccount().getCustomerId().toString();
+    settings = settings[customerId] || settings[Object.keys(settings)[0]]
     for (let rowId in settings) {
       try {
         runScript(settings[rowId]);
@@ -117,9 +133,7 @@ function main() {
 function getEntities(settings, anomalySettings) {
   let afterDataEntities = getAfterEntityData(settings, anomalySettings);
   // console.log(`afterDataEntities: ${JSON.stringify(afterDataEntities)}`)
-  if (Object.keys(afterDataEntities).length == 0) {
-    return
-  }
+  // Keep going when the current period is empty: entities that dropped to zero are anomalies
 
   let beforeDataEntities = getBeforeEntityData(settings, anomalySettings);
   // console.log(`beforeDataEntities: ${JSON.stringify(beforeDataEntities)}`);
@@ -160,6 +174,18 @@ function combineBeforeAndAfterEntities(beforeDataEntities, afterDataEntities) {
 
   //pull everything into afterDataEntities object
   //add compare metricics (percententityIdes)
+  //an entity with no rows in the current period dropped to zero
+  for (let entityId in beforeDataEntities) {
+    if (typeof afterDataEntities[entityId] !== "undefined") {
+      continue;
+    }
+    const zeroMetrics = {};
+    for (let metric in beforeDataEntities[entityId].beforeMetrics) {
+      zeroMetrics[metric] = 0;
+    }
+    afterDataEntities[entityId] = Object.assign({}, beforeDataEntities[entityId], { afterMetrics: zeroMetrics });
+  }
+
   for (let entityId in afterDataEntities) {
     if (typeof beforeDataEntities[entityId] === "undefined") {
       continue;
@@ -526,10 +552,10 @@ class Query {
     let postStartDate = new Date(date.getTime() - (this.settings.CURRENT_PERIOD_START * 24 * 60 * 60 * 1000));
     let postEndDate = new Date(date.getTime() - (this.settings.CURRENT_PERIOD_END * 24 * 60 * 60 * 1000));
 
-    let compareStartDate = preStartDate.yyyymmdd();
-    let compareEndDate = preEndDate.yyyymmdd();
-    let startDate = postStartDate.yyyymmdd();
-    let endDate = postEndDate.yyyymmdd();
+    let compareStartDate = formatAccountDate(preStartDate);
+    let compareEndDate = formatAccountDate(preEndDate);
+    let startDate = formatAccountDate(postStartDate);
+    let endDate = formatAccountDate(postEndDate);
     return {
       compareStartDate,
       compareEndDate,
@@ -843,8 +869,8 @@ function getSettingsSpreadsheet(settings) {
   if (ANYONE_CAN_EDIT_SHEETS) {
     setSpreadsheetToAnyoneCanEdit(spreadsheet);
   }
-  const file = DriveApp.getFilesByName(sheetName).next();
   try {
+    const file = DriveApp.getFileById(spreadsheet.getId());
     reportsFolder.addFile(file);
   } catch (e) {
     console.error(e);
@@ -948,7 +974,7 @@ function scanForAccounts() {
 
   for (let k in data) {
     //if "run script" is not set to "yes", continue.
-    if (data[k][header.indexOf("FLAG")] == '' || data[k][header.indexOf("FLAG")].toLowerCase() != 'yes') { continue; }
+    if (data[k][header.indexOf("FLAG")] == '' || String(data[k][header.indexOf("FLAG")]).toLowerCase() != 'yes') { continue; }
     let rowNum = parseInt(k, 10) + 4;
     let id = data[k][header.indexOf("ID")];
     let rowId = id + "/" + rowNum;
@@ -1000,10 +1026,10 @@ function processSetting(key, value, header, controlSheet) {
       return value
       break;
     case "bool":
-      return value == "Yes" ? true : false;
+      return String(value).trim().toLowerCase() == "yes";
       break;
     case "csv":
-      let ret = value.split(",")
+      let ret = String(value).split(",")
       ret = ret[0] == "" && ret.length == 1 ? [] : ret;
       if (ret.length == 0) {
         return [];

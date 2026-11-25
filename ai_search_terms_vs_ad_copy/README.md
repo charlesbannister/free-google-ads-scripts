@@ -50,3 +50,7 @@ Each row in the results sheet includes:
 - Spot potential negative keyword candidates (low relevance scores)
 
 **Note:** This script was created as part of a [Vibe Coding tutorial](https://www.youtube.com/watch?v=ETN5HpFbvZY) demonstrating how to build AI-powered Google Ads scripts.
+
+## Changes
+
+- **1.0.1 (2026-11-25)**: terms with exactly `MINIMUM_CLICKS` clicks are now included, only enabled responsive search ads are compared, ad text with `$` is sent unchanged, and the score is read from "N/10" (a reply repeating "0-10" no longer scores 0). No sheet changes needed.

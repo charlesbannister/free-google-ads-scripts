@@ -3,7 +3,7 @@
  * This script uses AI (ChatGPT) to compare search terms to ad copy,
  * creating a relevance score and writing it to a Google Sheet.
  * @author Charles Bannister (shabba.io)
- * @version 1.0.0
+ * @version 1.0.1
  * Written as part of a Vibe Coding Google Ads Script Tutorial
  * Tutorial: https://www.youtube.com/watch?v=ETN5HpFbvZY
  */
@@ -57,7 +57,7 @@ function getSearchTermData() {
 	const query = getSearchTermGaqlQuery();
 	const report = getSearchTermReport(query);
 	const flatRows = extractFlatSearchTermRows(report);
-	return flatRows.filter(row => row.clicks > MINIMUM_CLICKS);
+	return flatRows.filter(row => row.clicks >= MINIMUM_CLICKS);
 }
 
 function getSearchTermGaqlQuery() {
@@ -134,6 +134,8 @@ function getResponsiveSearchAds() {
     WHERE
       ad_group_ad_asset_view.enabled = true
       AND asset.type = 'TEXT'
+      AND ad_group_ad.status = 'ENABLED'
+      AND ad_group_ad.ad.type = 'RESPONSIVE_SEARCH_AD'
   `;
 
 	console.log(`GAQL Query Used for RSAs:\n${query}`);
@@ -185,9 +187,9 @@ function buildRelevancePrompts(searchTerms, rsaAds) {
 
 		matchingAds.forEach(ad => {
 			const prompt = OPENAI_PROMPT_TEMPLATE
-				.replace('{{searchTerm}}', term.searchTerm)
-				.replace('{{headlines}}', ad.headlines)
-				.replace('{{descriptions}}', ad.descriptions);
+				.replace('{{searchTerm}}', () => term.searchTerm)
+				.replace('{{headlines}}', () => ad.headlines)
+				.replace('{{descriptions}}', () => ad.descriptions);
 
 			prompts.push({
 				searchTerm: term.searchTerm,
@@ -259,8 +261,7 @@ function callChatGptApi(prompts, apiKey) {
 			}
 			const content = json.choices[0].message.content;
 
-			const match = content.match(/(\d+)/);
-			const score = match ? parseInt(match[1], 10) : null;
+			const score = extractRelevanceScore(content);
 
 			responses.push({
 				searchTerm: promptObj.searchTerm,
@@ -281,6 +282,20 @@ function callChatGptApi(prompts, apiKey) {
 	});
 
 	return responses;
+}
+
+/**
+ * Reads the 0-10 score from the reply. Prefers "N/10" and "score: N", so the
+ * "0-10" scale the model often repeats is not read as a score of 0.
+ */
+function extractRelevanceScore(content) {
+	const text = String(content);
+	const match = text.match(/(\d+(?:\.\d+)?)\s*\/\s*10\b/)
+		|| text.match(/score\D{0,15}?(\d+(?:\.\d+)?)/i)
+		|| text.replace(/\b0\s*(?:-|–|to)\s*10\b/g, '').match(/(\d+(?:\.\d+)?)/);
+	if (!match) return null;
+	const score = parseFloat(match[1]);
+	return score >= 0 && score <= 10 ? score : null;
 }
 
 function writeResponsesToSheet(responses) {

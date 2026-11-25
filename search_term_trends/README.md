@@ -42,6 +42,15 @@ The only limit is the script runtime of 30 minutes and the capacity of Google Sh
 
 💡 You can install the same script multiple times—just use a different Sheet URL each time.
 
+## Changes
+
+**Version 1.1.0 (2026-11-25)**
+- Conversions and conversion value are now added up as numbers. A term in more than one ad group could show a wrong figure (NaN) before.
+- Each campaign is listed once in the Campaigns column (a term in several ad groups of one campaign repeated the name).
+- Large reports no longer fail at the clear, filter, sort or write step with "the coordinates of the range are outside the dimensions of the sheet": the ranges now match the data, and the sheet grows when needed.
+- A blank or non-numeric sort column, clicks filter or impressions filter is skipped with a log line instead of stopping the run. A blank lookback window no longer divides by zero.
+- A `"` or `\` in a contains or not contains filter no longer breaks the query.
+
 ## Have Suggestions?
 
 Please let me know! Hearing your pain points is the number one way I can make improvements.

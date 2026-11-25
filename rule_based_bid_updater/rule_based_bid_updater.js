@@ -2,12 +2,15 @@
 * Bid Updater
 * Update bids for Search (Shopping & Text Ads)
 * Pause/Exclude Keywords/Products
-* @version: 1.0.7
+* @version: 1.0.8
 * @author: Charles Bannister of shabba.io
 * Updates *
  - Labels will be added for raised and lowered bids e.g. "R 9/27". Send an email if there's an error creating a label.
  - 1.0.6 - added Avg. Cpc filter
  - 1.0.7 - added catch for multiple bid updates per run.
+ - 1.0.8 - fixed: date range (quoted dates, full N days), Conversion Value filter, campaign name
+   contains/not contains, CpcBid vs avg filter, keywords using the ad group bid, bids rounded to
+   2 decimals, unchanged bids skipped, excluded product groups skipped.
  ***************************************************/
 
 // Template: https://docs.google.com/spreadsheets/d/1RjDClzOKNoe7_5JZwCudllh4objhE73B-NAaTpGHMxc
@@ -76,7 +79,7 @@ function runScript(SETTINGS, idArray) {
   // sendEmail(SETTINGS);
 
   log("Finished");
-  return updatedIdArray;
+  return updatedIdArray || idArray;
 }
 
 function getLabelIdFromString(str) {
@@ -191,8 +194,8 @@ function checkProductGroups(SETTINGS, idArray) {
   var query = [
     selectStatement,
     getQueryWhereString(SETTINGS),
-    " and segments.date >" + SETTINGS.DATE_RANGE[0],
-    " and segments.date <=" + SETTINGS.DATE_RANGE[1]
+    " and ad_group_criterion.negative = FALSE ",
+    getDateWhereString(SETTINGS)
   ].join(" ");
 
   log("product partition report query: " + query);
@@ -220,9 +223,8 @@ function checkProductGroups(SETTINGS, idArray) {
     row["metrics.conversions_value"] = parseFloat(
       row["metrics.conversions_value"].toString().replace(/,/g, "")
     );
-    row["cpc_bid"] = microsToMoney(
-      row["ad_group_criterion.cpc_bid_micros"]
-    );
+    row["cpc_bid"] = getCurrentCpcBid(row);
+    row["CpcBid"] = row["cpc_bid"];
 
     row = addCustomMetricsToRow(row);
 
@@ -230,7 +232,7 @@ function checkProductGroups(SETTINGS, idArray) {
 
     if (skipEntity(row, SETTINGS)) continue;
 
-    var rowId = row["ad_group.id"] + row["ad_group_criterion.criterion_id"];
+    var rowId = getRowId(row["ad_group.id"], row["ad_group_criterion.criterion_id"]);
     if (idArray.indexOf(rowId) < 0) {
       idArray.push(rowId);
     } else {
@@ -288,7 +290,7 @@ function getFilterWhereString(SETTINGS) {
     Impressions: "metrics.impressions",
     Clicks: "metrics.clicks",
     Conversions: "metrics.conversions",
-    ConversionValue: "metrics.conversion_value",
+    ConversionValue: "metrics.conversions_value",
     CpcBid: "ad_group_criterion.cpc_bid_micros"
   };
 
@@ -321,7 +323,8 @@ function getFilterWhereString(SETTINGS) {
 
     filterKey = filterName + "_VALUE";
     let value = SETTINGS[filterKey]; //e.g. 50
-    if (sheetMetricName == "Cost" || sheetMetricName == "CpcBid") {
+    let isAvgValue = String(value).toLowerCase().indexOf("avg") > -1;
+    if (!isAvgValue && (sheetMetricName == "Cost" || sheetMetricName == "CpcBid")) {
       value = value * 1000000; //cost uses micros but we'll allow monetary amounts in the script
     }
     filterMap[filterName]["value"] = value;
@@ -384,17 +387,17 @@ function getQueryWhereString(SETTINGS) {
 
   for (var i in SETTINGS.CAMPAIGN_NAME_CONTAINS) {
     whereArray.push(
-      " and campaign.name LIKE '" +
+      " and campaign.name LIKE '%" +
       SETTINGS.CAMPAIGN_NAME_CONTAINS[i].trim() +
-      "'"
+      "%'"
     );
   }
 
   for (var i in SETTINGS.CAMPAIGN_NAME_NOT_CONTAINS) {
     whereArray.push(
-      " and campaign.name NOT LIKE '" +
+      " and campaign.name NOT LIKE '%" +
       SETTINGS.CAMPAIGN_NAME_NOT_CONTAINS[i].trim() +
-      "'"
+      "%'"
     );
   }
 
@@ -455,14 +458,13 @@ function addCustomMetricsToRow(row) {
 
 function checkKeywords(SETTINGS, idArray) {
   let selectStatement =
-    "SELECT  ad_group_criterion.keyword.text,ad_group_criterion.parental_status.type, ad_group_criterion.keyword.match_type, ad_group_criterion.criterion_id, ad_group_criterion.cpc_bid_micros, metrics.top_impression_percentage, ad_group_criterion.labels, ad_group_criterion.effective_cpc_bid_micros, metrics.conversions_value, metrics.clicks, metrics.conversions, metrics.conversions_value, metrics.cost_micros, metrics.impressions, ad_group.name, campaign.name, ad_group.id, campaign.id, campaign.bidding_strategy_type, campaign.bidding_strategy, metrics.search_impression_share, metrics.search_absolute_top_impression_share FROM keyword_view";
+    "SELECT  ad_group_criterion.keyword.text,ad_group_criterion.parental_status.type, ad_group_criterion.keyword.match_type, ad_group_criterion.criterion_id, ad_group_criterion.cpc_bid_micros, metrics.top_impression_percentage, ad_group_criterion.labels, ad_group_criterion.effective_cpc_bid_micros, metrics.clicks, metrics.conversions, metrics.conversions_value, metrics.cost_micros, metrics.impressions, ad_group.name, campaign.name, ad_group.id, campaign.id, campaign.bidding_strategy_type, campaign.bidding_strategy, metrics.search_impression_share, metrics.search_absolute_top_impression_share FROM keyword_view";
 
   var query = [
     selectStatement,
     getQueryWhereString(SETTINGS),
     " and ad_group_criterion.status = ENABLED ",
-    " and segments.date >" + SETTINGS.DATE_RANGE[0],
-    " and segments.date <=" + SETTINGS.DATE_RANGE[1]
+    getDateWhereString(SETTINGS)
   ].join(" ");
 
   log("Keyword query: " + query);
@@ -490,9 +492,8 @@ function checkKeywords(SETTINGS, idArray) {
     row["metrics.conversions_value"] = parseFloat(
       row["metrics.conversions_value"].toString().replace(/,/g, "")
     );
-    row["cpc_bid"] = microsToMoney(
-      row["ad_group_criterion.cpc_bid_micros"]
-    );
+    row["cpc_bid"] = getCurrentCpcBid(row);
+    row["CpcBid"] = row["cpc_bid"];
 
     row = addCustomMetricsToRow(row);
 
@@ -503,7 +504,7 @@ function checkKeywords(SETTINGS, idArray) {
       continue;
     }
 
-    var rowId = row["ad_group.id"] + row["ad_group_criterion.criterion_id"];
+    var rowId = getRowId(row["ad_group.id"], row["ad_group_criterion.criterion_id"]);
     if (idArray.indexOf(rowId) < 0) {
       idArray.push(rowId);
     } else {
@@ -606,6 +607,7 @@ function skipEntity(row, SETTINGS) {
   function filterNotInCustomMetrics(metric) {
     if (metric == "ad_group_criterion.effective_cpc_bid_micro")
       return false;
+    if (metric == "CpcBid") return false; //compared with row.CpcBid (needed for "avg" values)
     return Object.keys(CUSTOM_METRICS).indexOf(metric) === -1;
   }
 
@@ -683,7 +685,35 @@ function calculateNewBid(row, SETTINGS) {
 
   //  log("New bid after min/max check: " + newBid)
 
-  return parseFloat(newBid);
+  //bids are set in whole currency units of 0.01
+  return Math.round(parseFloat(newBid) * 100) / 100;
+}
+
+//row ids from the report and from entities must match as text
+function getRowId(adGroupId, criterionId) {
+  return String(adGroupId) + String(criterionId);
+}
+
+//the bid the keyword/product actually uses: its own bid, or the ad group bid it inherits
+function getCurrentCpcBid(row) {
+  var ownBid = parseFloat(row["ad_group_criterion.cpc_bid_micros"]);
+  if (ownBid > 0) return microsToMoney(ownBid);
+  return microsToMoney(row["ad_group_criterion.effective_cpc_bid_micros"]);
+}
+
+//GAQL needs quoted YYYY-MM-DD dates; the range is N days up to and including yesterday
+function getDateWhereString(SETTINGS) {
+  var toGaqlDate = function (yyyymmdd) {
+    var d = String(yyyymmdd);
+    return d.slice(0, 4) + "-" + d.slice(4, 6) + "-" + d.slice(6, 8);
+  };
+  return (
+    " and segments.date BETWEEN '" +
+    toGaqlDate(SETTINGS.DATE_RANGE[0]) +
+    "' AND '" +
+    toGaqlDate(SETTINGS.DATE_RANGE[1]) +
+    "'"
+  );
 }
 
 function updateProducts(SETTINGS, productGroupChanges) {
@@ -710,8 +740,10 @@ function updateProducts(SETTINGS, productGroupChanges) {
       var productGroup = productGroups.next();
       var productGroupId = productGroup.getId();
       var adGroup = productGroup.getAdGroup();
-      var rowId = String(adGroup.getId()) + String(productGroupId);
+      var rowId = getRowId(adGroup.getId(), productGroupId);
       var row = productGroupChanges["rows"][rowId];
+      if (!row) continue;
+      if (SETTINGS.ACTION !== "Pause" && row.newBid === row.cpc_bid) continue; //no change to make
 
       var oldBid = row.cpc_bid;
       if (oldBid === "Excluded") continue;
@@ -768,7 +800,12 @@ function updateProducts(SETTINGS, productGroupChanges) {
       ];
 
       if (SETTINGS.ACTION === "Pause") {
-        productGroup.exclude();
+        try {
+          productGroup.exclude();
+        } catch (e) {
+          log("Error excluding product id " + productGroupId + ": " + e);
+          continue;
+        }
         newBid = SETTINGS.ACTION;
         // log("Excluding "+ row.Id)
       } else {
@@ -782,8 +819,9 @@ function updateProducts(SETTINGS, productGroupChanges) {
             " bid to " +
             row.newBid +
             ". Bid strategy: " +
-            row.BiddingStrategyType
+            row["campaign.bidding_strategy_type"]
           );
+          continue;
         }
       }
 
@@ -825,9 +863,11 @@ function updateKeyords(SETTINGS, keywordChanges) {
       var keyword = keywords.next();
       var keywordId = keyword.getId();
       var adGroupId = keyword.getAdGroup().getId();
-      var rowId = String(adGroupId) + String(keywordId);
+      var rowId = getRowId(adGroupId, keywordId);
 
       var row = keywordChanges["rows"][rowId];
+      if (!row) continue;
+      if (SETTINGS.ACTION !== "Pause" && row.newBid === row.cpc_bid) continue; //no change to make
 
       var oldBid = row.cpc_bid;
       var target = SETTINGS["TARGET_" + SETTINGS.TARGET_TYPE];
@@ -894,7 +934,7 @@ function updateKeyords(SETTINGS, keywordChanges) {
             " bid to " +
             row.newBid +
             ". Bid Strategy: " +
-            row.BiddingStrategyType
+            row["campaign.bidding_strategy_type"]
           );
           //  log(JSON.stringify(row))
           continue;

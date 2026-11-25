@@ -2,7 +2,7 @@
 * Google Shopping Trends Report
  * @author Charles Bannister
  * More scripts at https://shabba.io
- * @version 1.1.0
+ * @version 1.1.1
 **/
 
 // Template: https://docs.google.com/spreadsheets/d/1oxPn_cd-2lm5nKUof7GMgDDgBrMjfm2ZQOB3kNmgkWU/
@@ -15,7 +15,7 @@ let INPUT_SHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
 // be named with "High Intent", "Medium Intent" or "Low Intent"
 const INCLUDE_INTENT = false;
 
-const VERSION = '1.1.0';
+const VERSION = '1.1.1';
 const UPDATED_AT = 'April 2024'
 
 //Set to true or false, without quotes
@@ -114,8 +114,26 @@ function updateProductData(settings, sheetName, productData) {
       continue;
     }
     const lookbackDays = settings[setting];
+    if (!isValidLookbackDays(lookbackDays)) {
+      console.warn(`Skipping ${setting}: the number of days '${lookbackDays}' is blank or not a whole number of 0 or more`);
+      continue;
+    }
     updateProductDataForWindow(settings, lookbackDays, sheetName, productData);
   }
+}
+
+/**
+ * A lookback window must be a whole number of days, 0 (today) or more.
+ * Blank cells would otherwise divide the averages by zero.
+ * @param {*} lookbackDays
+ * @returns {boolean}
+ */
+function isValidLookbackDays(lookbackDays) {
+  if (lookbackDays === '' || lookbackDays === null || typeof lookbackDays === 'undefined') {
+    return false;
+  }
+  const days = Number(lookbackDays);
+  return Number.isInteger(days) && days >= 0;
 }
 
 class GetSettings {
@@ -204,7 +222,12 @@ class SheetFilter {
 
   getFilterRange() {
     const reportSheet = SPREADSHEET.getSheetByName(this.sheetName);
-    const rangeValues = [START_ROW + 1, START_COLUMN, reportSheet.getLastRow(), reportSheet.getLastColumn()];
+    const numRows = reportSheet.getLastRow() - START_ROW;
+    const numColumns = reportSheet.getLastColumn() - START_COLUMN + 1;
+    if (numRows < 1 || numColumns < 1) {
+      return;
+    }
+    const rangeValues = [START_ROW + 1, START_COLUMN, numRows, numColumns];
     const filterRange = reportSheet.getRange(...rangeValues);
     return filterRange;
   }
@@ -223,7 +246,17 @@ function sortSheetValues(reportSheet, sortByColumnNumber,) {
   if (LOCAL) {
     return;
   }
-  reportSheet.getRange(START_ROW + 2, START_COLUMN, getLastRow(reportSheet), reportSheet.getLastColumn()).sort({ column: sortByColumnNumber, ascending: false });
+  const column = Number(sortByColumnNumber);
+  if (!Number.isInteger(column) || column < START_COLUMN || column > reportSheet.getLastColumn()) {
+    console.warn(`Not sorting: the sort column '${sortByColumnNumber}' is not a column number in the report`);
+    return;
+  }
+  // Data rows start under the two header rows
+  const numRows = reportSheet.getLastRow() - (START_ROW + 1);
+  if (numRows < 1) {
+    return;
+  }
+  reportSheet.getRange(START_ROW + 2, START_COLUMN, numRows, reportSheet.getLastColumn() - START_COLUMN + 1).sort({ column: column, ascending: false });
 }
 
 /**
@@ -255,6 +288,14 @@ function writeSheetData(sheetData, sheetName) {
     return;
   }
   const reportSheet = SPREADSHEET.getSheetByName(sheetName);
+  const lastRowNeeded = START_ROW + sheetData.length - 1;
+  if (lastRowNeeded > reportSheet.getMaxRows()) {
+    reportSheet.insertRowsAfter(reportSheet.getMaxRows(), lastRowNeeded - reportSheet.getMaxRows());
+  }
+  const lastColumnNeeded = START_COLUMN + sheetData[0].length - 1;
+  if (lastColumnNeeded > reportSheet.getMaxColumns()) {
+    reportSheet.insertColumnsAfter(reportSheet.getMaxColumns(), lastColumnNeeded - reportSheet.getMaxColumns());
+  }
   reportSheet.getRange(START_ROW, START_COLUMN, sheetData.length, sheetData[0].length).setValues(sheetData);
 }
 
@@ -271,7 +312,7 @@ function clearSheetData(sheetName) {
   if (reportSheet.getLastRow() < START_ROW + 1) {
     return;
   }
-  reportSheet.getRange(START_ROW, START_COLUMN, reportSheet.getLastRow(), reportSheet.getLastColumn()).clear();
+  reportSheet.getRange(START_ROW, START_COLUMN, reportSheet.getLastRow() - START_ROW + 1, reportSheet.getLastColumn() - START_COLUMN + 1).clear();
 }
 
 class GetSheetArray {
@@ -299,6 +340,11 @@ class GetSheetArray {
       for (let metric in METRICS) {
         for (let lookbackKey of LOOKBACK_WINDOW_KEYS) {
           let lookbackDays = this.settings[lookbackKey];
+          if (typeof reportData[String(lookbackDays)] === 'undefined') {
+            // Blank or invalid window: leave the cell empty
+            arrayRow.push('');
+            continue;
+          }
           if (itemId in reportData[lookbackDays] === false) {
             arrayRow.push(0);
             continue;
@@ -484,22 +530,22 @@ class GetProductData {
   getWhereStringFromSettings() {
     let whereString = '';
     if (this.settings['item_id_contains'] !== '') {
-      whereString += ` and segments.product_item_id like "%${this.settings['item_id_contains']}%" `;
+      whereString += ` and segments.product_item_id like "%${gaqlLikeText(this.settings['item_id_contains'])}%" `;
     }
     if (this.settings['item_id_not_contains'] !== '') {
-      whereString += ` and segments.product_item_id not like "%${this.settings['item_id_not_contains']}%" `;
+      whereString += ` and segments.product_item_id not like "%${gaqlLikeText(this.settings['item_id_not_contains'])}%" `;
     }
     if (this.settings['product_title_contains'] !== '') {
-      whereString += ` and segments.product_title like "%${this.settings['product_title_contains']}%" `;
+      whereString += ` and segments.product_title like "%${gaqlLikeText(this.settings['product_title_contains'])}%" `;
     }
     if (this.settings['product_title_not_contains'] !== '') {
-      whereString += ` and segments.product_title not like "%${this.settings['product_title_not_contains']}%" `;
+      whereString += ` and segments.product_title not like "%${gaqlLikeText(this.settings['product_title_not_contains'])}%" `;
     }
     if (this.settings['campaign_contains'] !== '') {
-      whereString += ` and campaign.name like "%${this.settings['campaign_contains']}%" `;
+      whereString += ` and campaign.name like "%${gaqlLikeText(this.settings['campaign_contains'])}%" `;
     }
     if (this.settings['campaign_not_contains'] !== '') {
-      whereString += ` and campaign.name not like "%${this.settings['campaign_not_contains']}%" `;
+      whereString += ` and campaign.name not like "%${gaqlLikeText(this.settings['campaign_not_contains'])}%" `;
     }
     return whereString;
   }
@@ -515,6 +561,12 @@ class GetProductData {
   }
 
   dateRangeStringFromDate(date) {
+    // Use the account's time zone so "yesterday" is the account's yesterday
+    try {
+      return Utilities.formatDate(date, AdsApp.currentAccount().getTimeZone(), 'yyyy-MM-dd');
+    } catch (e) {
+      // Fall back to the script's own time zone
+    }
     //format the date as YYYY-MM-DD
     let year = date.getFullYear();
     let month = date.getMonth() + 1 < 10 ? `0${date.getMonth() + 1}` : date.getMonth() + 1;
@@ -546,6 +598,15 @@ class GetProductData {
       },
     ];
   }
+}
+
+/**
+ * Makes sheet text safe inside a double-quoted GAQL LIKE string
+ * @param {*} value
+ * @returns {string}
+ */
+function gaqlLikeText(value) {
+  return String(value).replace(/\\/g, '\\\\').replace(/"/g, '\\"');
 }
 
 function calculateCostOfSalePercentage(cost, revenue) {

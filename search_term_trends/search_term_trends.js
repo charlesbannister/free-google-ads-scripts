@@ -2,7 +2,7 @@
  * Search Term Trends Report
  * A Search Term Trends Report Google Ads Script
  * @author Charles Bannister
- * @version 1.0.0
+ * @version 1.1.0
  * More scripts at https://shabba.io
 **/
 
@@ -192,7 +192,9 @@ class SheetFilter {
 
   getFilterRange() {
     const reportSheet = SPREADSHEET.getSheetByName(this.sheetName);
-    const filterRange = reportSheet.getRange(START_ROW + 1, START_COLUMN, reportSheet.getLastRow(), reportSheet.getLastColumn());
+    const numRows = Math.max(reportSheet.getLastRow() - START_ROW, 1);
+    const numColumns = Math.max(reportSheet.getLastColumn() - START_COLUMN + 1, 1);
+    const filterRange = reportSheet.getRange(START_ROW + 1, START_COLUMN, numRows, numColumns);
     return filterRange;
   }
 }
@@ -210,7 +212,14 @@ function sortSheetValues(reportSheet, sortByColumnNumber) {
   if (LOCAL) {
     return;
   }
-  reportSheet.getRange(START_ROW + 2, START_COLUMN, reportSheet.getLastRow(), reportSheet.getLastColumn()).sort({ column: sortByColumnNumber, ascending: false });
+  const numRows = reportSheet.getLastRow() - START_ROW - 1;
+  const numColumns = reportSheet.getLastColumn() - START_COLUMN + 1;
+  const column = Number(sortByColumnNumber);
+  if (numRows < 1 || !Number.isInteger(column) || column < START_COLUMN || column >= START_COLUMN + numColumns) {
+    console.log('Not sorting: no data rows or sort_by_column_number is not a column of the report:', sortByColumnNumber);
+    return;
+  }
+  reportSheet.getRange(START_ROW + 2, START_COLUMN, numRows, numColumns).sort({ column: column, ascending: false });
 }
 
 function updateSearchTermDataForWindow(settings, lookbackDays, sheetName, searchTermData) {
@@ -224,6 +233,14 @@ function writeSheetData(sheetData, sheetName) {
     return;
   }
   const reportSheet = SPREADSHEET.getSheetByName(sheetName);
+  const lastRowNeeded = START_ROW + sheetData.length - 1;
+  if (reportSheet.getMaxRows() < lastRowNeeded) {
+    reportSheet.insertRowsAfter(reportSheet.getMaxRows(), lastRowNeeded - reportSheet.getMaxRows());
+  }
+  const lastColumnNeeded = START_COLUMN + sheetData[0].length - 1;
+  if (reportSheet.getMaxColumns() < lastColumnNeeded) {
+    reportSheet.insertColumnsAfter(reportSheet.getMaxColumns(), lastColumnNeeded - reportSheet.getMaxColumns());
+  }
   reportSheet.getRange(START_ROW, START_COLUMN, sheetData.length, sheetData[0].length).setValues(sheetData);
 }
 
@@ -242,7 +259,7 @@ function clearSheetData(sheetName) {
   if (reportSheet.getLastRow() < START_ROW + 1) {
     return;
   }
-  reportSheet.getRange(START_ROW, START_COLUMN, reportSheet.getLastRow(), reportSheet.getLastColumn()).clear();
+  reportSheet.getRange(START_ROW, START_COLUMN, reportSheet.getLastRow() - START_ROW + 1, reportSheet.getLastColumn() - START_COLUMN + 1).clear();
 }
 
 class GetSheetArray {
@@ -331,13 +348,21 @@ class GetReportData {
       searchTerm['metrics.clicks'] = parseInt(searchTerm['metrics.clicks']);
       data[searchTermText].clicks = data[searchTermText].clicks + searchTerm['metrics.clicks'] || searchTerm['metrics.clicks'];
       searchTerm['metrics.impressions'] = parseInt(searchTerm['metrics.impressions']);
+      // Report values can be strings: without this, "1.5" + "2" joins as "1.52"
+      searchTerm['metrics.conversions'] = parseFloat(searchTerm['metrics.conversions']) || 0;
+      searchTerm['metrics.conversions_value'] = parseFloat(searchTerm['metrics.conversions_value']) || 0;
       data[searchTermText].impressions = data[searchTermText].impressions + searchTerm['metrics.impressions'] || searchTerm['metrics.impressions'];
       data[searchTermText].conversions = data[searchTermText].conversions + searchTerm['metrics.conversions'] || searchTerm['metrics.conversions'];
       data[searchTermText].conversionsValue = data[searchTermText].conversionsValue + searchTerm['metrics.conversions_value'] || searchTerm['metrics.conversions_value'];
       let cost = searchTerm['metrics.cost_micros'] / 1000000;
       data[searchTermText].cost = data[searchTermText].cost + cost || cost;
       data[searchTermText].cos = calculateCostOfSalePercentage(data[searchTermText].cost, data[searchTermText].conversionsValue);
-      data[searchTermText].campaigns = typeof data[searchTermText].campaigns === 'undefined' ? searchTerm["campaign.name"] : data[searchTermText].campaigns + ", " + searchTerm['campaign.name'];
+      // A search_term_view row is one term in one ad group, so list each campaign once
+      if (typeof data[searchTermText].campaigns === 'undefined') {
+        data[searchTermText].campaigns = searchTerm["campaign.name"];
+      } else if (data[searchTermText].campaigns.split(", ").indexOf(searchTerm['campaign.name']) === -1) {
+        data[searchTermText].campaigns = data[searchTermText].campaigns + ", " + searchTerm['campaign.name'];
+      }
       if (INCLUDE_INTENT) {
         data[searchTermText].highestCampaignIntent = this.getHighestCampaignIntent(data[searchTermText].campaigns);
       }
@@ -357,7 +382,8 @@ class GetReportData {
   }
 
   averageValues(data) {
-    if (this.lookbackDays === 0) {
+    // 0 (today) or a blank/invalid window: don't divide (it would give Infinity or NaN)
+    if (!(Number(this.lookbackDays) > 0)) {
       return data;
     }
 
@@ -441,22 +467,26 @@ class GetSearchTermData {
   getWhereStringFromSettings() {
     let whereString = '';
     if (this.settings['search_term_contains'] !== '') {
-      whereString += ` and search_term_view.search_term like "%${this.settings['search_term_contains']}%" `;
+      whereString += ` and search_term_view.search_term like "%${likeValue(this.settings['search_term_contains'])}%" `;
     }
     if (this.settings['search_term_not_contains'] !== '') {
-      whereString += ` and search_term_view.search_term not like "%${this.settings['search_term_not_contains']}%" `;
+      whereString += ` and search_term_view.search_term not like "%${likeValue(this.settings['search_term_not_contains'])}%" `;
     }
     if (this.settings['campaign_contains'] !== '') {
-      whereString += ` and campaign.name like "%${this.settings['campaign_contains']}%" `;
+      whereString += ` and campaign.name like "%${likeValue(this.settings['campaign_contains'])}%" `;
     }
     if (this.settings['campaign_not_contains'] !== '') {
-      whereString += ` and campaign.name not like "%${this.settings['campaign_not_contains']}%" `;
+      whereString += ` and campaign.name not like "%${likeValue(this.settings['campaign_not_contains'])}%" `;
     }
-    if (this.settings['impressions_filter'] !== '') {
-      whereString += ` and metrics.impressions > ${this.settings['impressions_filter']}`;
+    if (isNumberSetting(this.settings['impressions_filter'])) {
+      whereString += ` and metrics.impressions > ${Number(this.settings['impressions_filter'])}`;
+    } else if (this.settings['impressions_filter'] !== '') {
+      console.warn('Ignoring impressions_filter, it is not a number:', this.settings['impressions_filter']);
     }
-    if (this.settings['clicks_filter'] !== '') {
-      whereString += ` and metrics.clicks > ${this.settings['clicks_filter']}`;
+    if (isNumberSetting(this.settings['clicks_filter'])) {
+      whereString += ` and metrics.clicks > ${Number(this.settings['clicks_filter'])}`;
+    } else if (this.settings['clicks_filter'] !== '') {
+      console.warn('Ignoring clicks_filter, it is not a number:', this.settings['clicks_filter']);
     }
     return whereString;
   }
@@ -501,6 +531,20 @@ class GetSearchTermData {
       },
     ];
   }
+}
+
+/**
+ * Makes a sheet value safe inside a double-quoted GAQL string:
+ * escapes \ and " so they cannot break the query. Wildcards (%, _) work as before.
+ */
+function likeValue(value) {
+  return String(value)
+    .replace(/\\/g, '\\\\')
+    .replace(/"/g, '\\"');
+}
+
+function isNumberSetting(value) {
+  return value !== '' && value !== null && String(value).trim() !== '' && isFinite(Number(value));
 }
 
 function calculateCostOfSalePercentage(cost, revenue) {

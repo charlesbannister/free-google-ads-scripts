@@ -3,7 +3,7 @@
  * @author Charles Bannister of shabba.io
  * Surface new keyword opportunities
  * Purchased from shabba.io and not for resale or redistribution - thanks!
- * @version 1.0.0
+ * @version 1.0.1
  * Free updates & support at https://shabba.io/script/9
  * 
 **/
@@ -106,9 +106,14 @@ function populateOutputSheet(keywords, SETTINGS) {
   log("clearing output sheet");
   let sheet_operations = new SheetOperations(SETTINGS);
   let sheet = sheet_operations.getSheetByName(SETTINGS["TAB_NAME"]);
-  if (sheet.getMaxRows() > 3) {
-    sheet.deleteRows(4, parseInt(sheet.getMaxRows()) - 3);
+  //keep row 4 (a sheet can't lose all its non-header rows) and clear it instead
+  if (sheet.getMaxRows() > 4) {
+    sheet.deleteRows(5, parseInt(sheet.getMaxRows()) - 4);
   }
+  if (sheet.getMaxRows() >= 4 && sheet.getLastColumn() > 0) {
+    sheet.getRange(4, 1, 1, sheet.getLastColumn()).clearContent();
+  }
+  const ignoredTerms = getIgnoredTermsFromIgnoredSheet();
 
   SETTINGS["FILTER_MAP"] = getFilterMap(SETTINGS);
 
@@ -172,6 +177,9 @@ function populateOutputSheet(keywords, SETTINGS) {
     }
     if (!containsStringsNotInSearchTerm(row.Query, SETTINGS)) {
       // console.log(`skipping due to NOT contains string logic`)
+      continue;
+    }
+    if (ignoredTerms.indexOf(String(row.Query).trim().toLowerCase()) > -1) {
       continue;
     }
     if (fuzzyStringInArray(row.Query, keywords, SETTINGS['FUZZY_THRESHOLD'])) {
@@ -252,7 +260,7 @@ function getKeywords() {
     "FROM   KEYWORDS_PERFORMANCE_REPORT " +
     "WHERE Status = ENABLED AND IsNegative = FALSE AND Impressions > " +
     MIN_KEYWORD_IMPRESSIONS +
-    "DURING " +
+    " DURING " +
     DATE_RANGE
   var keywordReport = AdsApp.report(query);
 
@@ -298,6 +306,22 @@ function getSearchTermsToIgnoreFromSheet(SETTINGS) {
   }
 
   return searchTermsToIgnore;
+}
+
+/**
+ * Search terms already on the Ignored Terms sheet (column A, from row 5)
+ * @returns {array} lower case search terms
+ */
+function getIgnoredTermsFromIgnoredSheet() {
+  let sheet = SpreadsheetApp.openByUrl(INPUT_SHEET_URL).getSheetByName(IGNORED_TERMS_SHEET_NAME);
+  if (!sheet || sheet.getLastRow() < 5) {
+    return [];
+  }
+  return sheet
+    .getRange(5, 1, sheet.getLastRow() - 4, 1)
+    .getValues()
+    .map(function (row) { return String(row[0]).trim().toLowerCase(); })
+    .filter(function (term) { return term !== ""; });
 }
 
 function sendEmailAlert(SETTINGS, numberOfSearchTerms) {
@@ -608,9 +632,8 @@ class SheetOperations {
     let enforceCheckbox = SpreadsheetApp.newDataValidation();
     enforceCheckbox.requireCheckbox();
     enforceCheckbox.setAllowInvalid(false);
-    enforceCheckbox.build();
 
-    range.setDataValidation(enforceCheckbox);
+    range.setDataValidation(enforceCheckbox.build());
   }
 
   getSheetByName(name) {
@@ -662,10 +685,10 @@ class SheetOperations {
     if (logArray.length === 0) return;
 
     let sheet = this.getSheetByName(sheetName);
-    let lastRow = this.getLastRow(sheet, 4);
-    // log("lastRow: " +  lastRow)
-    if (lastRow < parseInt(logArray.length) + 20) {
-      sheet.insertRowsAfter(lastRow, lastRow);
+    //make sure the sheet has enough rows for the data (plus some spare)
+    let rowsNeeded = start_row - 1 + parseInt(logArray.length) + 20;
+    if (sheet.getMaxRows() < rowsNeeded) {
+      sheet.insertRowsAfter(sheet.getMaxRows(), rowsNeeded - sheet.getMaxRows());
     }
 
     log("writing to sheet");
@@ -707,14 +730,15 @@ class SheetOperations {
 
   sortColumn(sheet, columnNumber) {
     let startRow = 4;
-    if (sheet.getLastRow() - startRow < 1) {
+    let numRows = sheet.getLastRow() - startRow + 1;
+    if (numRows < 2) {
       return
     }
     sheet
       .getRange(
         startRow,
         1,
-        sheet.getLastRow() - startRow,
+        numRows,
         sheet.getLastColumn()
       )
       .sort({ column: columnNumber, ascending: false });

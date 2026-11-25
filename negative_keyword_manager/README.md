@@ -11,7 +11,7 @@ Everything you need for reviewing search terms - ignore, add negatives, or add k
 | **Difficulty** | Easy |
 | **Schedule** | Weekly |
 | **Makes Changes** | Optional |
-| **Last Updated** | 2026-01-23 |
+| **Last Updated** | 2026-11-25 |
 
 ## Links
 
@@ -69,3 +69,14 @@ Every account is different, but as a general rule we recommend setting up the fo
 **Rule:** Impressions > 100 AND Clicks > 0.99 AND CTR < 0.5%
 
 **Reason:** Low CTR can be a sign of irrelevant search terms. Find potential negative keywords especially with a view to increase overall CTR.
+
+## Changelog
+
+**1.4 (2026-11-25)** - no sheet changes needed.
+
+- One failing rule (row) no longer stops the other rules; the run still ends with an error naming the failed rules.
+- A negative or keyword Google refuses (over 10 words or 80 characters, missing match type) is skipped and noted in the logs, instead of stopping the run before anything was logged.
+- New keywords from terms with no clicks or no cost use the ad group's default bid instead of an invalid CPC.
+- Preview runs no longer log ticked negatives as added (logged terms are hidden from later reports, so they were never added).
+- The Search Terms tab grows to fit large reports, the cost sort includes the last row, and sheet ranges no longer run past the end of a tab.
+- A ticked box written as the text "FALSE" is no longer treated as ticked; a checkbox in "Run Script" and numeric campaign filters no longer crash.

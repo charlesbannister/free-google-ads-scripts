@@ -5,7 +5,7 @@
  * against the account's actual keywords within the same ad group.
  * 
  * @authors Charles Bannister & Gabriele Benedetti
- * @version 1.4.0
+ * @version 1.4.1
  * 
  */
 
@@ -243,7 +243,7 @@ function main() {
     console.log('');
   }
   console.log('=== Keyword-Based Negatives Script Started ===');
-  console.log(`Version: 1.4.0`);
+  console.log(`Version: 1.4.1`);
   console.log(`Full Automate Mode: ${FULL_AUTOMATE_MODE}`);
   console.log(`Debug Mode: ${DEBUG_MODE}`);
 
@@ -261,11 +261,20 @@ function main() {
   // Step 1: Process any checked items from previous run
   const appliedNegatives = processCheckedItems(outputSheet, logsSheet, executionMode);
 
+  // In preview nothing was really added, so remember the ticked rows to re-tick them below
+  const previewCheckedKeys = executionMode === 'Preview'
+    ? getCheckedItems(outputSheet).map(getNegativeKey)
+    : [];
+
   // Step 2: Clear the output sheet after processing
   clearOutputSheetData(outputSheet);
 
-  // Step 3: Find potential negatives
-  const potentialNegatives = findAllPotentialNegatives();
+  // Step 3: Find potential negatives (skip any just added this run: Google can lag)
+  const appliedKeys = new Set(
+    executionMode === 'Live' ? appliedNegatives.map(getNegativeKey) : []
+  );
+  const potentialNegatives = findAllPotentialNegatives()
+    .filter(item => !appliedKeys.has(getNegativeKey(item)));
 
   if (potentialNegatives.length === 0) {
     console.log('No potential negatives found.');
@@ -278,6 +287,9 @@ function main() {
 
   // Step 4: Write to output sheet with checkboxes
   writeToOutputSheet(outputSheet, potentialNegatives);
+  if (previewCheckedKeys.length > 0) {
+    recheckRows(outputSheet, potentialNegatives, previewCheckedKeys);
+  }
 
   // Step 5: Send "Found" email notification
   if (EMAIL_RECIPIENTS && potentialNegatives.length > 0) {
@@ -621,6 +633,7 @@ function getSearchTermsForAdGroup(adGroupId, campaignId) {
     AND ad_group.id = '${adGroupId}'
     AND campaign.id = '${campaignId}'
     AND metrics.impressions > 0
+    AND search_term_view.status NOT IN ('EXCLUDED', 'ADDED_EXCLUDED')
   `;
 
   const searchTerms = [];
@@ -940,7 +953,13 @@ function applyNegativesFromData(items, logsSheet, executionMode) {
     const adGroupItems = itemsByAdGroup[adGroupId];
     const firstItem = adGroupItems[0];
 
+    const seenTerms = new Set();
     for (const item of adGroupItems) {
+      // Skip a repeat of the same term in the same ad group (duplicate sheet rows)
+      const termKey = String(item.searchTerm).trim().toLowerCase();
+      if (seenTerms.has(termKey)) continue;
+      seenTerms.add(termKey);
+
       const result = applyNegativeKeyword(
         item.campaignId,
         item.adGroupId,
@@ -971,6 +990,30 @@ function applyNegativesFromData(items, logsSheet, executionMode) {
 }
 
 /**
+ * Key for one negative: ad group ID plus lower-cased search term.
+ * @param {Object} item - Item with adGroupId and searchTerm
+ * @returns {string} Key
+ */
+function getNegativeKey(item) {
+  return `${String(item.adGroupId)}|${String(item.searchTerm).trim().toLowerCase()}`;
+}
+
+/**
+ * Re-ticks output rows whose key was ticked before (used in preview runs).
+ * @param {GoogleAppsScript.Spreadsheet.Sheet} sheet - The output sheet
+ * @param {Array<Object>} sortedData - Items in the order they were written
+ * @param {Array<string>} checkedKeys - Keys of previously ticked rows
+ */
+function recheckRows(sheet, sortedData, checkedKeys) {
+  const keys = new Set(checkedKeys);
+  sortedData.forEach((item, index) => {
+    if (keys.has(getNegativeKey(item))) {
+      sheet.getRange(index + 2, 1).setValue(true);
+    }
+  });
+}
+
+/**
  * Groups items by ad group ID.
  * @param {Array<Object>} items - Array of items
  * @returns {Object} Object keyed by ad group ID
@@ -996,6 +1039,15 @@ function groupItemsByAdGroup(items) {
  * @returns {Object} Result object with success boolean and optional error message
  */
 function applyNegativeKeyword(campaignId, adGroupId, searchTerm) {
+  // Google rejects keywords over 80 characters or 10 words
+  const plainTerm = String(searchTerm).trim();
+  if (!plainTerm) {
+    return { success: false, error: 'Skipped: empty search term' };
+  }
+  if (plainTerm.length > 80 || plainTerm.split(/\s+/).length > 10) {
+    return { success: false, error: 'Skipped: over 80 characters or 10 words' };
+  }
+
   try {
     const adGroupIterator = AdsApp.adGroups()
       .withIds([adGroupId])

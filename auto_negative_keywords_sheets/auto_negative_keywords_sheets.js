@@ -7,7 +7,7 @@
 * This script will automatically add negative keywords based on specified criteria
 * 
 * Note updating the version (the variable) will update the sheet
-* Version: 4.2.0
+* Version: 4.3.0
 *
 *Updates:
 - 1.8 - converted positive keywords to lowercase making then case-insensitive
@@ -34,6 +34,9 @@
 *  - added email alerts
 * 3.1.0 - combined the single account & MCC versions (different templates)
 * 4.0.0 - added approx match, campaign level support, output sheets and a new layout
+* 4.3.0 - Performance Max campaign rules (PMAX_SUPPORT), keyword limit checks, one failing
+*         sheet or negative no longer stops the run, preview mode no longer creates lists,
+*         full lists overflow into the next list
 **/
 
 let INPUT_SHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
@@ -51,9 +54,13 @@ let INPUT_SHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
 //DELETE ABOVE THIS LINE BEFORE SCRAMBLING
 const TEST_MODE = false;
 
+// Rules whose campaign is Performance Max read its search terms (campaign_search_term_view)
+// and add campaign negatives through the Google Ads API. Set to false to turn this off.
+const PMAX_SUPPORT = true;
+
 //When updating the version number
 //Also update the SheetAdmin with the number of columns, etc.
-const VERSION_NUMBER = '4.2.0';
+const VERSION_NUMBER = '4.3.0';
 const VERSION_NUMBER_RANGE = 'B1'
 
 const LOG_INVALID_SEARCH_TERMS = true;
@@ -207,9 +214,9 @@ function getAccountIds() {
         .indexOf("(skip)") > -1
     )
       continue;
-    let accountId = sheet
+    let accountId = String(sheet
       .getRange(ACCOUNT_ID_CELL_REFERENCE)
-      .getValue()
+      .getValue())
       .trim();
     if (!accountIdIsValid(accountId)) continue;
     if (accountIds.indexOf(accountId) > -1) continue; //already added
@@ -242,6 +249,7 @@ function runAccount() {
   let negativeList = new NegativeList();
   negativeList.createNegativeListsMap();
   testLog(`Negative lists: ${Object.keys(negativeList.negativeListsMap)}`);
+  const failedSheets = [];
   for (let sheetName of uniqueSheetNames) {
 
     //MCC logic - only run this account's sheets
@@ -250,7 +258,16 @@ function runAccount() {
     testLog('sheetAccountId: ' + sheetAccountId);
     testLog('Customer ID: ' + AdsApp.currentAccount().getCustomerId());
     if (isMCC() && sheetAccountId !== AdsApp.currentAccount().getCustomerId()) continue;
-    runSheet(sheetName, negativeList, sheet);
+    // One sheet's error (e.g. a list or campaign that no longer exists) must not stop the others.
+    try {
+      runSheet(sheetName, negativeList, sheet);
+    } catch (e) {
+      console.error(`Error running sheet '${sheetName}': ${e && e.message ? e.message : e}`);
+      failedSheets.push(`${sheetName}: ${e && e.message ? e.message : e}`);
+    }
+  }
+  if (failedSheets.length > 0) {
+    throw new Error(`${failedSheets.length} sheet(s) failed. ${failedSheets.join(' | ')}`);
   }
 
 }
@@ -989,8 +1006,11 @@ function runSheet(sheetName, negativeList, sheet) {
   let sheetParams = SheetParams.getSheetParams(sheetParamsData, negativeList);
   testLog(`sheetParams: ${JSON.stringify(sheetParams)}`);
 
+  if (!sheetParamsData || Object.keys(sheetParamsData).length === 0) {
+    return;
+  }
   const firstRuleCampaignId = sheetParamsData[Object.keys(sheetParamsData)[0]].campaignId;
-  if (!sheetParamsData || shouldSkipSheet(firstRuleCampaignId,)) {
+  if (shouldSkipSheet(firstRuleCampaignId,)) {
     return;
   }
 
@@ -1354,8 +1374,11 @@ function addAdGroupNegativesToParams(ruleParams, SETTINGS, sheet) {
   const numberOfMatches = ruleParams.numberOfMatches;
   const keywords = ruleParams.keywords;
   const campaignId = ruleParams.campaignId;
+  // A skipped rule has no negatives (rather than undefined, which crashed the rule).
+  ruleParams.negativeKeywords = [];
 
   if (skipAGroup(numberOfMatches, ruleParams, adGroupId, sheet, columnNumber, SETTINGS)) {
+    ruleParams.skipped = true; // keep skipAGroup's message in the log cell
     return
   }
 
@@ -1386,6 +1409,12 @@ function getAdGroupNegatives(subRuleParams, SETTINGS, sheet) {
   testLog(`Found ${subRuleParams.negativeKeywords.length} negative keywords pre-filtering`)
   testLog(`subRuleParams.negativeKeywords: ${JSON.stringify(subRuleParams.negativeKeywords)}`);
   filterUnnecessaryNegativeKeywords(subRuleParams, SETTINGS)
+  // Google Ads refuses keywords over 80 characters or 10 words.
+  subRuleParams.negativeKeywords = subRuleParams.negativeKeywords.filter(negativeKeyword => {
+    if (isValidNegativeText(negativeKeyword)) return true;
+    console.log(`Search term '${negativeKeyword}' is over 10 words or 80 characters and cannot be a negative keyword. Skipping.`);
+    return false;
+  });
   testLog(`Found ${subRuleParams.negativeKeywords.length} negative keywords post-filtering`)
 
 }
@@ -1431,6 +1460,9 @@ function filterUnnecessaryNegativeKeywords(subRuleParams, SETTINGS) {
 function processNegativeKeywords(subRuleParams, SETTINGS, sheet, negativeList) {
 
   let negativesAdded = [];
+  if (subRuleParams.skipped) {
+    return negativesAdded;
+  }
 
   addAdGroupNegativeKeywords(subRuleParams, SETTINGS, negativesAdded, subRuleParams.campaignId);
   addCampaignNegativeKeywords(subRuleParams, SETTINGS, negativesAdded, subRuleParams.campaignId);
@@ -1441,10 +1473,14 @@ function processNegativeKeywords(subRuleParams, SETTINGS, sheet, negativeList) {
 }
 
 
-function processListNegativeKeywords(subRuleParams, SETTINGS, negativesAdded, negativeList, negativeListsIndex = 0) {
+function processListNegativeKeywords(subRuleParams, SETTINGS, negativesAdded, negativeList, negativeListsIndex = 0, keywordsToAdd = subRuleParams.negativeKeywords) {
   if (subRuleParams.addNegativeTo !== ADD_NEGATIVE_TO_OPTIONS.LIST) {
     testLog(`Skipping adding negatives to list as addNegativeTo is set to ${subRuleParams.addNegativeTo}`)
     return;
+  }
+  // With one list name and 'create list if full', the overflow lists are '<name> 1', '<name> 2'...
+  if (negativeListsIndex === 0 && SETTINGS["CREATE_LIST_IF_FULL"] && subRuleParams.negativeListName.length === 1 && subRuleParams.negativeListName[0]) {
+    subRuleParams.negativeListName = updateNegativeKeywordListNames(subRuleParams.negativeListName[0], true);
   }
   if (subRuleParams.negativeListName[negativeListsIndex] === "") {
     return;
@@ -1457,6 +1493,10 @@ function processListNegativeKeywords(subRuleParams, SETTINGS, negativesAdded, ne
   }
 
   let negativeListName = subRuleParams.negativeListName[negativeListsIndex];
+  if (!SETTINGS["CREATE_LIST_IF_FULL"] && !negativeList.negativeListsMap[negativeListName]) {
+    console.warn(`Negative list '${negativeListName}' was not found and 'Create list if full' is off. Skipping.`);
+    return;
+  }
   if (!SETTINGS["CREATE_LIST_IF_FULL"] && negativeList.negativeListsMap[negativeListName].isFull) {
     console.warn(`Negative list '${negativeListName}' is full. Skipping.`);
     return;
@@ -1464,21 +1504,33 @@ function processListNegativeKeywords(subRuleParams, SETTINGS, negativesAdded, ne
 
   //use the list unless full then move onto the next one
   //create if not exists
-  negativeList.createNegativeListIfNotExists(negativeListName, subRuleParams.negativeListName[0]);
+  // Preview Mode in the sheet must not create real lists either.
+  const sheetPreviewOnly = SETTINGS['PREVIEW_MODE'] && !AdsApp.getExecutionInfo().isPreview();
+  negativeList.createNegativeListIfNotExists(negativeListName, subRuleParams.negativeListName[0], sheetPreviewOnly);
 
   if (negativeList.negativeListsMap[negativeListName].isFull) {
     negativeListsIndex++;
     log(`Negative list '${negativeListName}' is full. Moving onto the next list (${subRuleParams.negativeListName[negativeListsIndex]})`);
-    processListNegativeKeywords(subRuleParams, SETTINGS, negativesAdded, negativeList, negativeListsIndex);
+    processListNegativeKeywords(subRuleParams, SETTINGS, negativesAdded, negativeList, negativeListsIndex, keywordsToAdd);
     return;
   }
-  negativeList.addNegativeKeywordsFactory(
+  const leftOver = negativeList.addNegativeKeywordsFactory(
     negativeListName,
-    subRuleParams.negativeKeywords,
+    keywordsToAdd,
     negativesAdded,
     SETTINGS['NEGATIVE_MATCH_TYPE'],
     SETTINGS['PREVIEW_MODE'],
-  )
+  ) || [];
+  if (leftOver.length === 0) {
+    return;
+  }
+  // The list filled up: the rest go to the next list instead of overfilling this one.
+  negativeList.negativeListsMap[negativeListName].isFull = true;
+  if (!SETTINGS["CREATE_LIST_IF_FULL"] && negativeListsIndex + 1 >= subRuleParams.negativeListName.length) {
+    console.warn(`Negative list '${negativeListName}' is full. ${leftOver.length} negatives were not added.`);
+    return;
+  }
+  processListNegativeKeywords(subRuleParams, SETTINGS, negativesAdded, negativeList, negativeListsIndex + 1, leftOver);
 }
 class AddListNegatives {
 
@@ -1503,18 +1555,18 @@ class AddListNegatives {
     this.addNegativeKeywords(isPreview, list['list'], negativesChunk);
     testLog(`${negativesChunk.length} negatives were added`);
     this.negativesAddedCount += negativesChunk.length;
-    if (this.negativesToAddCount > this.negativesAddedCount) {
-      testLog(`Total negatives to add: ${this.negativesToAddCount}. Negs added: ${this.negativesAddedCount}. Running again.`);
-      const nextNegativeKeywordsBatch = negativeKeywords.slice(negativesChunk.length);
-      testLog(`Next batch length: ${nextNegativeKeywordsBatch.length}`)
-      params.negativeKeywords = nextNegativeKeywordsBatch;
-      this.add(params, negativesAdded);
-    }
+    // Keep the in-memory list up to date so later rules see the space left.
+    list.negatives = (list.negatives || []).concat(negativesChunk);
+    // Whatever did not fit is handed back for the next list (it used to be re-sent to this full list).
+    return negativeKeywords.slice(negativesChunk.length);
   }
 
   addNegativeKeywords(isPreview, negativeKeywordList, negativeKeywords) {
     const inRunMode = !AdsApp.getExecutionInfo().isPreview();
     if (isPreview && inRunMode) {
+      return;
+    }
+    if (!negativeKeywordList || negativeKeywords.length === 0) {
       return;
     }
     negativeKeywordList.addNegativeKeywords(negativeKeywords);
@@ -1576,7 +1628,7 @@ class NegativeList {
     testLog(`negativeListName: ${negativeListName}`)
     testLog(`negativeKeywords: ${negativeKeywords}`)
     if (!negativeKeywords.length) {
-      return;
+      return [];
     }
     let params = {
       negativeKeywords,
@@ -1584,7 +1636,7 @@ class NegativeList {
       isPreview,
       list: this.negativeListsMap[negativeListName]
     }
-    new AddListNegatives().add(params, negativesAdded);
+    return new AddListNegatives().add(params, negativesAdded);
   }
 
   /*
@@ -1593,8 +1645,13 @@ class NegativeList {
   * @param {string} negativeListName
   * @param {string} sourceNegativeListName - where to grab the campaigns from
   */
-  createNegativeListIfNotExists(negativeListName, sourceNegativeListName) {
+  createNegativeListIfNotExists(negativeListName, sourceNegativeListName, sheetPreviewOnly = false) {
     if (this.negativeListsMap[negativeListName]) {
+      return;
+    }
+    if (sheetPreviewOnly) {
+      console.log(`Preview Mode: the list '${negativeListName}' would be created.`);
+      this.negativeListsMap[negativeListName] = { list: null, negatives: [], isFull: false };
       return;
     }
 
@@ -1607,7 +1664,16 @@ class NegativeList {
     let negativeKeywordList = negativeKeywordListOperation.getResult();
     //assign the campaigns from the source list
     //source = first negative list in the comma separated list
-    this.assignListToCampaigns(negativeKeywordList, this.negativeListsMap[sourceNegativeListName]["campaigns"]);
+    // The source list's campaigns are read fresh each time: an iterator can only be read once,
+    // so a second new list used to get no campaigns.
+    const source = this.negativeListsMap[sourceNegativeListName] || {};
+    if (negativeKeywordList && source["list"]) {
+      this.assignListToCampaigns(negativeKeywordList, source["list"].campaigns().get());
+    }
+    if (!negativeKeywordList) {
+      this.negativeListsMap[negativeListName] = { list: null, negatives: [], isFull: false };
+      return;
+    }
     this.negativeListsMap[negativeListName] = { list: negativeKeywordList, negatives: [], isFull: false };
   }
 
@@ -1637,7 +1703,6 @@ class NegativeList {
 
       this.negativeListsMap[negativeListName]["negatives"] = sharedNegativeKeywords;
       this.negativeListsMap[negativeListName]["isFull"] = sharedNegativeKeywords.length >= this.maxListSize;
-      this.negativeListsMap[negativeListName]["campaigns"] = negativeList.campaigns().get();
     }
   }
 
@@ -1649,7 +1714,11 @@ class NegativeList {
   assignListToCampaigns(negativeKeywordList, campaigns) {
     while (campaigns.hasNext()) {
       let campaign = campaigns.next();
-      campaign.addNegativeKeywordList(negativeKeywordList);
+      try {
+        campaign.addNegativeKeywordList(negativeKeywordList);
+      } catch (e) {
+        console.error(`Could not apply the new list to a campaign: ${e.message}`);
+      }
     }
   }
 
@@ -1723,6 +1792,11 @@ function addCampaignNegativeKeywords(subRuleParams, SETTINGS, negativesAdded, ca
     testLog(`Skipping adding negatives to campaign as addNegativeTo is set to ${subRuleParams.addNegativeTo}`)
     return;
   }
+  // AdsApp.campaigns() does not return Performance Max campaigns.
+  if (PMAX_SUPPORT && campaignType === campaignTypes.search && isPmaxCampaign(campaignId)) {
+    addPmaxCampaignNegativeKeywords(campaignId, subRuleParams.negativeKeywords, SETTINGS, negativesAdded);
+    return;
+  }
 
   let campaignIterator = campaignType === campaignTypes.shopping ? AdsApp.shoppingCampaigns() : AdsApp.campaigns();
 
@@ -1761,7 +1835,13 @@ function adGroupNegativeKeywordService(adGroup, negativeKeywords, SETTINGS, nega
       SETTINGS["NEGATIVE_MATCH_TYPE"]
     );
     if (!SETTINGS.PREVIEW_MODE || AdsApp.getExecutionInfo().isPreview()) {
-      adGroup.createNegativeKeyword(negativeKeyword);
+      // One refused keyword must not stop the rest of the rule.
+      try {
+        adGroup.createNegativeKeyword(negativeKeyword);
+      } catch (e) {
+        console.error(`Could not add negative ${negativeKeyword} to ad group ${adGroup.getName()}: ${e.message}`);
+        continue;
+      }
     }
     if (!negativesAdded.includes(negativeKeyword)) {
       negativesAdded.push(negativeKeyword);
@@ -1776,7 +1856,13 @@ function campaignNegativeKeywordService(campaign, negativeKeywords, SETTINGS, ne
       SETTINGS["NEGATIVE_MATCH_TYPE"]
     );
     if (!SETTINGS.PREVIEW_MODE || AdsApp.getExecutionInfo().isPreview()) {
-      campaign.createNegativeKeyword(negativeKeyword);
+      // One refused keyword must not stop the rest of the rule.
+      try {
+        campaign.createNegativeKeyword(negativeKeyword);
+      } catch (e) {
+        console.error(`Could not add negative ${negativeKeyword} to campaign ${campaign.getName()}: ${e.message}`);
+        continue;
+      }
     }
     if (!negativesAdded.includes(negativeKeyword)) {
       negativesAdded.push(negativeKeyword);
@@ -1826,6 +1912,12 @@ class ExistingNegativeKeywords {
   }
 
   getCampaignNegatives() {
+    if (PMAX_SUPPORT && isPmaxCampaign(this.campaignId)) {
+      for (let negative of getPmaxCampaignNegatives(this.campaignId)) {
+        this.existingNegatives.push({ keyword: negative.text, match_type: negative.matchType.toLowerCase() });
+      }
+      return;
+    }
     const query = this.getCampaignNegativesReportQuery();
     return this.getReportNegatives(query);
   }
@@ -1938,19 +2030,28 @@ function generateNegativesFromAccount(
   fuzzyMatchThreshold
 ) {
 
-  const query = getGAQLQuery(SETTINGS, campaignId, adGroupId);
+  // Performance Max search terms are not in the search query report.
+  const usePmax = PMAX_SUPPORT && SETTINGS["PULL_FROM"] === PULL_FROM_OPTIONS.AD_GROUP_CAMPAIGN && isPmaxCampaign(campaignId);
+  let reportTerms = [];
+  if (usePmax) {
+    reportTerms = getPmaxSearchTerms(SETTINGS, campaignId);
+    console.log(`The Performance Max search term query returned ${reportTerms.length} rows`);
+  } else {
+    const query = getGAQLQuery(SETTINGS, campaignId, adGroupId);
 
-  log("query: " + query);
-  let report = AdsApp.report(query);
-  // AdsApp.report(query).exportToSheet(testOutputSheet);
-  let rows = report.rows();
-  console.log(`The search term report query returned ${rows.totalNumEntities()} rows`);
+    log("query: " + query);
+    let report = AdsApp.report(query);
+    // AdsApp.report(query).exportToSheet(testOutputSheet);
+    let rows = report.rows();
+    console.log(`The search term report query returned ${rows.totalNumEntities()} rows`);
+    while (rows.hasNext()) {
+      reportTerms.push(rows.next().Query);
+    }
+  }
   let negativeKeywords = [];
   //loop through this campaign's queries, add anything which doesn't contain our positive keywords to the negativeKeywords array (these will be added as negatives later)
   let searchTerms = [];
-  while (rows.hasNext()) {
-    let row = rows.next();
-    let query = row.Query;
+  for (let query of reportTerms) {
     searchTerms.push(query);
     const validator = new SearchTermValidator(query, parseInt(SETTINGS["MIN_WORDS"]), parseInt(SETTINGS["MAX_WORDS"]));
     const isValid = validator.isValid();
@@ -1977,6 +2078,161 @@ function generateNegativesFromAccount(
   testLog(`Search Terms: ${searchTerms.join(", ")}`);
   console.log(`${negativeKeywords.length} negative keywords were found.`)
   return negativeKeywords;
+}
+
+/**
+ * Google Ads keyword limits: 80 characters and 10 words.
+ * @param {string} text
+ * @returns {boolean}
+ */
+function isValidNegativeText(text) {
+  const trimmed = String(text || '').trim();
+  return trimmed.length > 0 && trimmed.length <= 80 && trimmed.split(/\s+/).length <= 10;
+}
+
+const PMAX_CAMPAIGN_CACHE = {};
+
+/**
+ * Whether a campaign is Performance Max. Any error reads as "not PMax" (the old behaviour).
+ * @param {string} campaignId
+ * @returns {boolean}
+ */
+function isPmaxCampaign(campaignId) {
+  if (!campaignId) return false;
+  const id = String(campaignId);
+  if (id in PMAX_CAMPAIGN_CACHE) return PMAX_CAMPAIGN_CACHE[id];
+  let isPmax = false;
+  try {
+    const rows = AdsApp.report(`SELECT campaign.id, campaign.advertising_channel_type FROM campaign WHERE campaign.id = ${id}`).rows();
+    isPmax = rows.hasNext() && String(rows.next()['campaign.advertising_channel_type']) === 'PERFORMANCE_MAX';
+  } catch (e) {
+    console.warn(`Could not read the campaign type of campaign ${id}: ${e.message}`);
+  }
+  PMAX_CAMPAIGN_CACHE[id] = isPmax;
+  return isPmax;
+}
+
+/**
+ * Performance Max search terms for one campaign, filtered by the sheet settings.
+ * campaign_search_term_view also holds some Search terms, hence the campaign filter.
+ * @param {Object} SETTINGS
+ * @param {string} campaignId
+ * @returns {Array<string>} search terms
+ */
+function getPmaxSearchTerms(SETTINGS, campaignId) {
+  if (typeof SETTINGS["DATE_RANGE"] !== "number") {
+    throw new Error("Lookback window (Days) is required");
+  }
+  const query = `SELECT campaign_search_term_view.search_term, metrics.impressions, metrics.clicks, metrics.conversions
+    FROM campaign_search_term_view
+    WHERE campaign.id = ${campaignId}
+    AND segments.date BETWEEN '${getAdWordsFormattedDate(SETTINGS["DATE_RANGE"], "yyyy-MM-dd")}' AND '${getAdWordsFormattedDate(0, "yyyy-MM-dd")}'`;
+  log("Performance Max query: " + query);
+  const has = value => String(value) !== "";
+  const contains = (SETTINGS["CONTAINS"] || []).map(x => String(x).toLowerCase()).filter(x => x);
+  const notContains = (SETTINGS["NOT_CONTAINS"] || []).map(x => String(x).toLowerCase()).filter(x => x);
+  const terms = [];
+  const rows = AdsApp.report(query).rows();
+  while (rows.hasNext()) {
+    const row = rows.next();
+    const term = String(row['campaign_search_term_view.search_term'] || '').trim();
+    if (!term) continue;
+    const clicks = Number(row['metrics.clicks'] || 0);
+    const impressions = Number(row['metrics.impressions'] || 0);
+    const conversions = Number(row['metrics.conversions'] || 0);
+    // The same conditions as the search query report (applied to the totals for the date range).
+    if (has(SETTINGS["CONVERSIONS_LESS_THAN"]) && !(conversions < Number(SETTINGS["CONVERSIONS_LESS_THAN"]))) continue;
+    if (has(SETTINGS["CLICKS_MORE_THAN"]) && !(clicks > Number(SETTINGS["CLICKS_MORE_THAN"]))) continue;
+    if (has(SETTINGS["IMPRESSIONS_MORE_THAN"]) && !(impressions > Number(SETTINGS["IMPRESSIONS_MORE_THAN"]))) continue;
+    const lower = term.toLowerCase();
+    if (contains.some(x => lower.indexOf(x) === -1)) continue;
+    if (notContains.some(x => lower.indexOf(x) > -1)) continue;
+    if (terms.indexOf(term) === -1) terms.push(term);
+  }
+  return terms;
+}
+
+/**
+ * Existing negative keywords on a campaign, read with GAQL (works for Performance Max).
+ * @param {string} campaignId
+ * @returns {Array<{text: string, matchType: string}>}
+ */
+function getPmaxCampaignNegatives(campaignId) {
+  const negatives = [];
+  try {
+    const rows = AdsApp.report(`SELECT campaign.id, campaign_criterion.keyword.text, campaign_criterion.keyword.match_type
+      FROM campaign_criterion
+      WHERE campaign_criterion.negative = TRUE
+      AND campaign_criterion.type = KEYWORD
+      AND campaign.id = ${campaignId}`).rows();
+    while (rows.hasNext()) {
+      const row = rows.next();
+      negatives.push({
+        text: String(row['campaign_criterion.keyword.text'] || '').trim(),
+        matchType: String(row['campaign_criterion.keyword.match_type'] || ''),
+      });
+    }
+  } catch (e) {
+    console.warn(`Could not read the negatives of campaign ${campaignId}: ${e.message}`);
+  }
+  return negatives;
+}
+
+/**
+ * Adds campaign negatives to a Performance Max campaign through the Google Ads API.
+ * Negatives that already exist (same text and match type) are not sent again.
+ * @param {string} campaignId
+ * @param {Array<string>} negativeKeywords plain search terms
+ * @param {Object} SETTINGS
+ * @param {Array<string>} negativesAdded filled with the negatives added (with match type syntax)
+ */
+function addPmaxCampaignNegativeKeywords(campaignId, negativeKeywords, SETTINGS, negativesAdded) {
+  if (!negativeKeywords || negativeKeywords.length === 0) return;
+  const matchTypeSetting = String(SETTINGS["NEGATIVE_MATCH_TYPE"] || '').toLowerCase();
+  const apiMatchType = { exact: 'EXACT', phrase: 'PHRASE', broad: 'BROAD', bmm: 'BROAD' }[matchTypeSetting];
+  if (!apiMatchType) {
+    throw new Error("Match type not recognised. Please provide one of Broad, BMM, Exact or Phrase");
+  }
+  const existing = {};
+  for (let negative of getPmaxCampaignNegatives(campaignId)) {
+    if (negative.matchType === apiMatchType) existing[negative.text.toLowerCase()] = true;
+  }
+  const texts = [];
+  for (let negativeKeyword of negativeKeywords) {
+    const text = String(negativeKeyword || '').trim();
+    if (!isValidNegativeText(text) || existing[text.toLowerCase()] || texts.indexOf(text) > -1) continue;
+    texts.push(text);
+  }
+  const keywordText = text => apiMatchType === 'BROAD' ? text : addMatchType(text, matchTypeSetting);
+  const record = text => {
+    const formatted = keywordText(text);
+    if (!negativesAdded.includes(formatted)) negativesAdded.push(formatted);
+  };
+  if (SETTINGS.PREVIEW_MODE && !AdsApp.getExecutionInfo().isPreview()) {
+    texts.forEach(record);
+    return;
+  }
+  const customerId = String(AdsApp.currentAccount().getCustomerId()).replace(/-/g, '');
+  for (let text of texts) {
+    try {
+      const result = AdsApp.mutate({
+        campaignCriterionOperation: {
+          create: {
+            campaign: `customers/${customerId}/campaigns/${campaignId}`,
+            negative: true,
+            keyword: { text: text, matchType: apiMatchType }
+          }
+        }
+      });
+      if (result && typeof result.isSuccessful === 'function' && !result.isSuccessful()) {
+        console.error(`Could not add negative '${text}' to Performance Max campaign ${campaignId}: ${result.getErrorMessages().join('; ')}`);
+        continue;
+      }
+      record(text);
+    } catch (e) {
+      console.error(`Could not add negative '${text}' to Performance Max campaign ${campaignId}: ${e.message}`);
+    }
+  }
 }
 
 
@@ -2319,6 +2575,8 @@ function addMatchType(word, matchType) {
  * @returns {array} - ['string1', 'string2', 'string3'...]
  */
 function stringToCsv(string) {
+  // A cell can hold a number or a date (e.g. a 'contains' value of 2024).
+  string = String(string === null || string === undefined ? "" : string);
   if (string.trim() == "") return [];
   return string
     .trim()

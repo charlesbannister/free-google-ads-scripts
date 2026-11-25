@@ -11,7 +11,7 @@ Auto-add negative keywords and receive irrelevant search term alerts without cha
 | **Difficulty** | Easy |
 | **Schedule** | Hourly |
 | **Makes Changes** | Yes |
-| **Last Updated** | 2026-01-23 |
+| **Last Updated** | 2026-11-25 |
 | **⭐ Superstar** | Yes |
 
 ## Links
@@ -80,3 +80,14 @@ This script has been used across thousands of accounts and we also use it oursel
 4. **Case insensitive** - You don't need to add multiple versions for different cases. Never repeat words especially if the number of matches is more than one.
 5. **Always preview first** - Review the results before running
 6. **Enable Alert Mode** so you can keep an eye on what's being added
+
+## Changelog
+
+**4.3.0 (2026-11-25)** - no sheet changes needed.
+
+- Performance Max: a rule whose campaign is Performance Max now reads that campaign's search terms and adds the negatives to the campaign (or to the rule's list). Existing negatives are never sent twice. Set `PMAX_SUPPORT = false` at the top of the script to turn this off.
+- Search terms over 10 words or 80 characters are skipped (Google Ads refuses them).
+- One failing sheet, rule or negative no longer stops the rest of the run; the run still ends with an error naming the failed sheets.
+- Preview Mode in the sheet no longer creates new negative lists.
+- With "Create list if full", a list that fills up mid-run now overflows into "<name> 1", "<name> 2"... instead of being overfilled.
+- A rule with no keywords keeps its "Please add keywords" message instead of showing "Error. Rule skipped."

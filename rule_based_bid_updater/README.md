@@ -52,3 +52,7 @@ It can also be wise to outright exclude a product or pause a keyword that's gone
 ## Coming Soon
 
 I'm working on a pro version with extra options and DSA support - let me know if you're interested and I'll bump it up the queue!
+
+## Changes
+
+- **1.0.8 (2026-11-25)**: fixed the date range (quoted dates, the full N days up to yesterday), the Conversion Value filter, the campaign name contains / does not contain filters (they only matched the exact name), the CpcBid vs `avg` filter, keywords that use the ad group bid, bids rounded to 0.01, unchanged bids no longer re-sent and logged, and excluded product groups are skipped. No sheet changes needed.

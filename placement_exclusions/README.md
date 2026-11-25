@@ -67,3 +67,7 @@ This script helps you identify unwanted placements, which you can optionally exc
 ## What if I have suggestions?
 
 Please let me know! Hearing your pain points is the number one way I can make improvements.
+
+## Changelog
+
+- **2.9.3** (2026-11-25): Fixes. Display campaigns are now linked to the shared exclusion list (the link step failed for every Display campaign). "Active placements only" now hides already-excluded placements as intended. A minimum cost with decimals (for example 1.10) no longer breaks the Display/Video report. ROAS shows 0 instead of an infinite value when a placement has conversion value but no cost. A clear error now shows when `SPREADSHEET_URL` is still the placeholder.

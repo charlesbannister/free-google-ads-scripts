@@ -3,7 +3,7 @@ Name: Negative Keyword List Full Checker
 Summary: Checks for full shared negative keyword lists and alerts once via email
 @Author: Charles Bannister of shabba.io
 More scripts at https://shabba.io
-Version: 1.0.0
+Version: 1.0.1
 */
 
 // CONFIG
@@ -76,6 +76,7 @@ function getNegativeKeywordListGaqlQuery() {
       shared_set.name
     FROM shared_criterion
     WHERE shared_set.type = 'NEGATIVE_KEYWORDS'
+      AND shared_set.status = 'ENABLED'
   `;
 
     console.log('GAQL Query used:');
@@ -110,13 +111,13 @@ function logNegativeKeywordListSummary(listData) {
  * @returns {Array<string>} List of alerted list IDs
  */
 function getAlreadyAlertedListIds() {
-    if (SPREADSHEET_URL === 'PASTE_YOUR_SPREADSHEET_URL_HERE') {
+    if (!SPREADSHEET_URL || SPREADSHEET_URL === 'YOUR_SPREADSHEET_URL_HERE' || SPREADSHEET_URL === 'PASTE_YOUR_SPREADSHEET_URL_HERE') {
         throw new Error('Please set the SPREADSHEET_URL to your tracking sheet URL.');
     }
 
     const sheet = getOrCreateSheet('Alerted Lists');
     const data = sheet.getDataRange().getValues();
-    const listIds = data.slice(1).map(row => row[0]);
+    const listIds = data.slice(1).map(row => String(row[0]));
 
     return listIds;
 }

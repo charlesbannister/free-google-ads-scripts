@@ -42,3 +42,7 @@ Don't forget you can install the same script multiple times, just update the She
 ## What if I have suggestions?
 
 Please let me know! Hearing your pain points is the number one way I can make improvements.
+
+## Changelog
+
+- **1.1.1** (2026-11-25): Fixes. Leaving a lookback window blank no longer writes "Infinity" into the sheet; its columns stay empty. Dates use the account's time zone. The report no longer fails when the tab has no spare rows, and a long report adds the rows it needs. Filters containing a double quote work. A blank sort column no longer stops the script.

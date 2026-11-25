@@ -43,3 +43,7 @@ This script monitors your shared negative keyword lists and sends you an **email
 - **One-time alert** – No alert fatigue, just actionable notifications
 
 **Note:** If a list fills up, gets cleaned out, then fills up again, it won't trigger another alert unless you remove its ID from the tracking sheet.
+
+## Changelog
+
+- **1.0.1** (2026-11-25): Lists that have been removed are no longer counted or alerted on. A clear error now shows when `SPREADSHEET_URL` is still the placeholder.

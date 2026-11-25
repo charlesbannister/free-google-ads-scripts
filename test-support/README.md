@@ -20,3 +20,11 @@ The file's header lists what is imitated and where it differs from Google (for e
 When the real Google Ads behaves differently from the mock, fix the mock first and add a test to `google-ads-scripts-mock.test.cjs`.
 
 Run: `node --test ai_auto_negative_keywords test-support` from the repository root (some older folders use other test runners).
+
+## Wanted additions (from the 2026-11-25 review of all live scripts)
+
+Each script's test file currently fills these gaps locally. Moving them here would let new tests reuse them:
+
+- Sheets: `appendRow`, `autoResizeColumn(s)`, `setName`, `setTabColor`, `setFrozenColumns`, `sort`; ranges `clear`, `sort`, `getFilter`, `insertCheckboxes`, `setDataValidation`, `clearDataValidations`, whole-row ranges (`'1:1'`), named ranges; `SpreadsheetApp.create`/`newDataValidation`; throwing on any range outside the grid (reads too); `insertRowsAfter` shifting rows.
+- Ads: `shopping_performance_view`, `performance_max_placement_view`, `detail_placement_view`, `product_group_view`, `ad_group_ad_asset_view`; date comparisons on quoted dates; an AWQL (`DURING`) stub; `AdsApp.keywords()`, `productGroups()`, `labels()`, `videoCampaigns()`, `excludedPlacementLists()`, `bulkUploads()`, `newNegativeKeywordListBuilder`; Google's keyword limits on entity `createNegativeKeyword`; `ad_group` report rows from `addAdGroup`.
+- Globals: `Logger`, `AdWordsApp`, `MccApp`, `DriveApp`; `Utilities.formatDate` honouring the time zone; exports of `MockRange`, `matches` and `RESOURCE_FIELDS`.

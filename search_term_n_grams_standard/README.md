@@ -51,6 +51,15 @@ Use this script to:
 - Set up alerts e.g. send an email if an nGram gets over 100 clicks without a conversion
 - Automatically add poor-performing nGrams as negative keywords
 
+## Changes
+
+**Version 1.1.0 (2026-11-25)**
+- A search term that repeats a word (for example "shoes for shoes") now counts once towards that nGram, not twice.
+- Extra spaces in a search term no longer create blank nGrams.
+- ROAS is 0 instead of Infinity for an nGram with conversion value but no cost.
+- Output tabs grow when needed, so more than 1,000 nGrams, or a newly created output sheet, no longer fails with "the coordinates of the range are outside the dimensions of the sheet". The formatting ranges now match the data.
+- A number in a comma-separated setting (for example a campaign name filter of `2024`) no longer stops the script.
+
 ## What if I have suggestions?
 
 Please let me know! Hearing your pain points is the number one way I can make improvements.

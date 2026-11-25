@@ -1,7 +1,7 @@
 /**
  * Account Search Term NGrams
  * @author Charles Bannister
- * @version 1.0.0
+ * @version 1.1.0
  * Free updates & support at  https://shabba.io/script/4
  * 
 **/
@@ -253,11 +253,21 @@ function writePotentialQueriesToSheet(SETTINGS, potentialQueries, sheet) {
 
   var checkBoxCol = 3;
 
-  sheet
-    .getRange(2, checkBoxCol, sheet.getMaxRows(), 1)
-    .clearDataValidations();
+  if (sheet.getMaxRows() > 1) {
+    sheet
+      .getRange(2, checkBoxCol, sheet.getMaxRows() - 1, 1)
+      .clearDataValidations();
+  }
 
   if (potentialQueries.length < 2) return;
+
+  //make sure the sheet is big enough (new tabs have 7 columns and 1,000 rows)
+  if (sheet.getMaxRows() < potentialQueries.length) {
+    sheet.insertRowsAfter(sheet.getMaxRows(), potentialQueries.length - sheet.getMaxRows());
+  }
+  if (sheet.getMaxColumns() < potentialQueries[0].length) {
+    sheet.insertColumnsAfter(sheet.getMaxColumns(), potentialQueries[0].length - sheet.getMaxColumns());
+  }
 
   //write the data
 
@@ -273,9 +283,9 @@ function writePotentialQueriesToSheet(SETTINGS, potentialQueries, sheet) {
     .getRange(1, 5, sheet.getLastRow(), 6)
     .setNumberFormat("0");
   sheet
-    .getRange(1, 8, sheet.getLastRow(), sheet.getLastColumn())
+    .getRange(1, 8, sheet.getLastRow(), sheet.getLastColumn() - 7)
     .setNumberFormat("0.00");
-  sheet.getRange(2, 7, sheet.getLastRow(), 1).setNumberFormat("0.00%");
+  sheet.getRange(2, 7, sheet.getLastRow() - 1, 1).setNumberFormat("0.00%");
 
   var enforceCheckbox = SpreadsheetApp.newDataValidation();
   enforceCheckbox.requireCheckbox();
@@ -358,7 +368,7 @@ function getQueriesAndWriteToSheet(SETTINGS) {
       row.CPA =
         row.Conversions == 0 ? 0 : round(row.Cost / row.Conversions, 2);
       row.ROAS =
-        row.ConversionValue == 0
+        row.ConversionValue == 0 || row.Cost == 0
           ? 0
           : round(row.ConversionValue / row.Cost, 2);
       row.CVR = row.Conversions > 0 ? row.Conversions / row.Clicks : 0;
@@ -473,7 +483,15 @@ function getNGramMap(SETTINGS) {
       row.ConversionValue.toString().replace(/,/g, "")
     );
 
-    var nGrams = row.Query.split(" ");
+    var nGrams = String(row.Query).trim().split(/\s+/).filter(function (word) { return word !== ""; });
+    // A query adds to each nGram once, even if the nGram repeats in it
+    var seenInQuery = {};
+    var addOnce = function (size, nGram) {
+      var key = size + "|" + nGram;
+      if (seenInQuery[key]) return false;
+      seenInQuery[key] = true;
+      return true;
+    };
     var metrics = [
       "Cost",
       "Impressions",
@@ -488,7 +506,7 @@ function getNGramMap(SETTINGS) {
 
       if (checkedQueries.indexOf(nGram) > -1) continue;
       map["1-grams"][nGram] = map["1-grams"][nGram] || {};
-      for (var m in metrics) {
+      if (addOnce(1, nGram)) for (var m in metrics) {
         map["1-grams"][nGram][metrics[m]] =
           map["1-grams"][nGram][metrics[m]] + row[metrics[m]] ||
           row[metrics[m]];
@@ -500,7 +518,7 @@ function getNGramMap(SETTINGS) {
         if (checkedQueries.indexOf(biGram) > -1) continue;
         map["2-grams"] = map["2-grams"] || {};
         map["2-grams"][biGram] = map["2-grams"][biGram] || {};
-        for (var m in metrics) {
+        if (addOnce(2, biGram)) for (var m in metrics) {
           map["2-grams"][biGram][metrics[m]] =
             map["2-grams"][biGram][metrics[m]] + row[metrics[m]] ||
             row[metrics[m]];
@@ -518,7 +536,7 @@ function getNGramMap(SETTINGS) {
         if (checkedQueries.indexOf(biGram) > -1) continue;
         map["3-grams"] = map["3-grams"] || {};
         map["3-grams"][biGram] = map["3-grams"][biGram] || {};
-        for (var m in metrics) {
+        if (addOnce(3, biGram)) for (var m in metrics) {
           map["3-grams"][biGram][metrics[m]] =
             map["3-grams"][biGram][metrics[m]] + row[metrics[m]] ||
             row[metrics[m]];
@@ -542,7 +560,7 @@ function getNGramMap(SETTINGS) {
         if (checkedQueries.indexOf(biGram) > -1) continue;
         map["4-grams"] = map["4-grams"] || {};
         map["4-grams"][biGram] = map["4-grams"][biGram] || {};
-        for (var m in metrics) {
+        if (addOnce(4, biGram)) for (var m in metrics) {
           map["4-grams"][biGram][metrics[m]] =
             map["4-grams"][biGram][metrics[m]] + row[metrics[m]] ||
             row[metrics[m]];
@@ -834,7 +852,7 @@ function processSetting(key, value, HEADER, CONTROL_SHEET) {
       return value == "" ? 0 : value;
       break;
     case "csv":
-      var ret = value.split(",");
+      var ret = String(value).split(",");
       ret = ret[0] == "" && ret.length == 1 ? [] : ret;
       if (ret.length == 0) {
         return [];
@@ -1119,7 +1137,7 @@ function Setting() {
         return value == "Yes" ? true : false;
         break;
       case "csv":
-        var ret = value.split(",");
+        var ret = String(value).split(",");
         ret = ret[0] == "" && ret.length == 1 ? [] : ret;
         if (ret.length == 0) {
           return [];
@@ -1182,7 +1200,8 @@ function Setting() {
  */
 function checkForDuplicateOutputSpreadsheetUrls() {
   const controlSheet = SpreadsheetApp.openByUrl(INPUT_SHEET_URL).getSheetByName(INPUT_TAB_NAME);
-  const urls = controlSheet?.getRange(4, 25, controlSheet.getLastRow(), 1)
+  if (!controlSheet || controlSheet.getLastRow() < 4) return;
+  const urls = controlSheet.getRange(4, 25, controlSheet.getLastRow() - 3, 1)
     .getValues()
     .flat()
     .filter(x => x !== '');

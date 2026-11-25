@@ -1,7 +1,7 @@
 # Auto Negative Keywords Script (Keyword Based)
 
 **Authors:** Charles Bannister & Gabriele Benedetti  
-**Version:** 1.4.0
+**Version:** 1.4.1
 
 A Google Ads Script that automatically identifies potential negative keywords by comparing search terms against your account's actual keywords within the same ad group.
 
@@ -128,6 +128,12 @@ The script uses multiple matching methods to determine if a search term is relev
 If any method scores ≥80% (configurable), the search term is considered a match and NOT flagged.
 
 ## Version History
+
+- **1.4.1** - Bug fixes (no sheet changes)
+  - Search terms that are already excluded (negated) are no longer suggested again every run
+  - Terms negated earlier in a run are not suggested or re-added in the same run (Full Automate no longer re-sends them)
+  - Preview runs keep your ticked boxes, so the next live run still applies them
+  - Terms over 80 characters or 10 words are logged as skipped instead of failing at Google
 
 - **1.4.0** - Enhanced matching logic & output improvements
   - Added subset words and shared words matching

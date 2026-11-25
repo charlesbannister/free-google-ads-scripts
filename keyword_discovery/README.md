@@ -72,3 +72,7 @@ Adding new rules is simple:
 ## What if I have suggestions?
 
 Please let me know! Hearing your pain points is the number one way I can make improvements.
+
+## Changes
+
+- **1.0.1 (2026-11-25)**: fixed the keyword query (it was missing a space before `DURING`), writing results when the output tab had few rows, Ignore checkboxes, sorting (the last row was left out), and terms on the Ignored Terms tab now stay out of the results. No sheet changes needed.

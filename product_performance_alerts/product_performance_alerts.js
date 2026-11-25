@@ -4,7 +4,7 @@
 * This script cannot make changes to your account.
 * @author Charles Bannister
 * @link https://shabba.io/script/16
-* @version: 1.0.0
+* @version: 1.0.1
 ***************************************************/
 
 // Template: https://docs.google.com/spreadsheets/d/1hxdVWZ8LPZzZEfevniOvmwYhIdrtgK6cAb5QQWUQCv4
@@ -18,7 +18,7 @@ let INPUT_TAB_NAME = "Settings";
 
 const SCRIPT_NAME = "Product Performance Alerts & Reports"
 
-const VERSION = "1.0.0";
+const VERSION = "1.0.1";
 
 let NUMBER_OF_FILTERS = 6;
 
@@ -285,6 +285,11 @@ function buildWhereArray(filterMap) {
     for (const part of filterParts) {
       partsArray.push(filterMap[filter][part]);
     }
+    // GAQL has no metrics.cost, only metrics.cost_micros
+    if (partsArray[0] === "metrics.cost" && h.isNumber(partsArray[2])) {
+      partsArray[0] = "metrics.cost_micros";
+      partsArray[2] = Math.round(Number(partsArray[2]) * 1000000);
+    }
     whereArray.push("AND " + partsArray.join(" "));
   }
 
@@ -327,49 +332,43 @@ function getQueryWhereString(SETTINGS) {
 
   for (let i in SETTINGS.CAMPAIGN_NAME_CONTAINS) {
     whereArray.push(
-      " and campaign.name LIKE '%" +
-      SETTINGS.CAMPAIGN_NAME_CONTAINS[i].trim() +
-      "%'"
+      " and campaign.name LIKE " +
+      gaqlQuote("%" + SETTINGS.CAMPAIGN_NAME_CONTAINS[i].trim() + "%")
     );
   }
 
   for (let i in SETTINGS.CAMPAIGN_NAME_NOT_CONTAINS) {
     whereArray.push(
-      " and campaign.name NOT LIKE '%" +
-      SETTINGS.CAMPAIGN_NAME_NOT_CONTAINS[i].trim() +
-      "%'"
+      " and campaign.name NOT LIKE " +
+      gaqlQuote("%" + SETTINGS.CAMPAIGN_NAME_NOT_CONTAINS[i].trim() + "%")
     );
   }
 
   for (let i in SETTINGS.ITEM_ID_CONTAINS) {
     whereArray.push(
-      " and segments.product_item_id LIKE '%" +
-      SETTINGS.ITEM_ID_CONTAINS[i].trim() +
-      "%'"
+      " and segments.product_item_id LIKE " +
+      gaqlQuote("%" + SETTINGS.ITEM_ID_CONTAINS[i].trim() + "%")
     );
   }
 
   for (let i in SETTINGS.ITEM_ID_NOT_CONTAINS) {
     whereArray.push(
-      " and segments.product_item_id NOT LIKE '%" +
-      SETTINGS.ITEM_ID_NOT_CONTAINS[i].trim() +
-      "%'"
+      " and segments.product_item_id NOT LIKE " +
+      gaqlQuote("%" + SETTINGS.ITEM_ID_NOT_CONTAINS[i].trim() + "%")
     );
   }
 
   for (let i in SETTINGS.PRODUCT_TITLE_CONTAINS) {
     whereArray.push(
-      " and segments.product_title LIKE '%" +
-      SETTINGS.PRODUCT_TITLE_CONTAINS[i].trim() +
-      "%'"
+      " and segments.product_title LIKE " +
+      gaqlQuote("%" + SETTINGS.PRODUCT_TITLE_CONTAINS[i].trim() + "%")
     );
   }
 
   for (let i in SETTINGS.PRODUCT_TITLE_NOT_CONTAINS) {
     whereArray.push(
-      " and segments.product_title NOT LIKE '%" +
-      SETTINGS.PRODUCT_TITLE_NOT_CONTAINS[i].trim() +
-      "%'"
+      " and segments.product_title NOT LIKE " +
+      gaqlQuote("%" + SETTINGS.PRODUCT_TITLE_NOT_CONTAINS[i].trim() + "%")
     );
   }
 
@@ -543,9 +542,11 @@ function addProductsToSheet(SETTINGS) {
     bidLogArray.push(logRow);
   }
 
+  //count before writing: writeToSheet adds the header row to the array
+  const numberOfProducts = bidLogArray.length;
   writeToSheet(SETTINGS, bidLogArray, SETTINGS["TAB_NAME"]);
-  log(parseInt(bidLogArray.length) + " products added to the sheet");
-  return bidLogArray.length > 0;
+  log(numberOfProducts + " products added to the sheet");
+  return numberOfProducts > 0;
 }
 
 function shoppingPerformanceViewReport() {
@@ -626,7 +627,7 @@ function getProductsFromApi(SETTINGS) {
     "from",
     reportName,
     getQueryWhereString(SETTINGS),
-    `and segments.date > ${SETTINGS.DATE_RANGE.split(",")[0]} and segments.date < ${SETTINGS.DATE_RANGE.split(",")[1]}`
+    getDateWhereString(SETTINGS.DATE_RANGE)
   ].join(" ");
 
   log("product_group_view report query: " + query);
@@ -671,6 +672,27 @@ function getProductsFromApi(SETTINGS) {
   return map;
 }
 
+/**
+ * GAQL date condition for a "yyyyMMdd,yyyyMMdd" range, both ends included
+ * @param {string} dateRange
+ * @returns {string}
+ */
+function getDateWhereString(dateRange) {
+  const toGaqlDate = (d) => `'${String(d).trim().replace(/^(\d{4})(\d{2})(\d{2})$/, "$1-$2-$3")}'`;
+  const parts = String(dateRange).split(",");
+  return `and segments.date BETWEEN ${toGaqlDate(parts[0])} AND ${toGaqlDate(parts[1])}`;
+}
+
+/**
+ * Quote sheet text for a GAQL string, using double quotes when it contains an apostrophe
+ * @param {string} text
+ * @returns {string}
+ */
+function gaqlQuote(text) {
+  text = String(text);
+  return text.indexOf("'") > -1 && text.indexOf('"') === -1 ? `"${text}"` : `'${text}'`;
+}
+
 function exportReportToSheet(report, sheetName) {
   const sheet = SpreadsheetApp.openByUrl(INPUT_SHEET_URL).getSheetByName(sheetName);
   if (!sheet) {
@@ -689,9 +711,10 @@ function isToday(date) {
 }
 
 function writeArrayToSheet(array, sheet, start_row) {
-  const rowsToInsert = array.length - (sheet.getLastRow() - 5)
+  //only add rows when the sheet is too short (it used to grow on every run)
+  const rowsToInsert = start_row + array.length - 1 - sheet.getMaxRows()
   if (rowsToInsert > 0) {
-    sheet.insertRowsAfter(5, rowsToInsert)
+    sheet.insertRowsAfter(sheet.getMaxRows(), rowsToInsert)
   }
   sheet.getRange(start_row, 1, array.length, array[0].length).setValues(array);
 }
@@ -720,15 +743,12 @@ function getHeaderRow(SETTINGS) {
 }
 
 function writeToSheet(SETTINGS, logArray, sheetName) {
-  if (!logArray.length) {
-    return;
-  }
   const spreadsheet = SpreadsheetApp.openByUrl(INPUT_SHEET_URL);
   new SheetFilter(spreadsheet, sheetName).removeFilter();
 
   const headerRow = getHeaderRow(SETTINGS)
   log(`header length: ${headerRow.length}`)
-  log(`first log row length: ${logArray[0].length}`)
+  log(`first log row length: ${logArray.length ? logArray[0].length : 0}`)
   logArray.unshift(headerRow);
   // log("Adding "+ logArray.length + " changes to " + sheetName)
   let sheet = SETTINGS.logSS.getSheetByName(sheetName);
@@ -745,9 +765,11 @@ function writeToSheet(SETTINGS, logArray, sheetName) {
     sheet.getFilter().remove();
   }
   const startRow = 3
-  sheet
-    .getRange(startRow, 1, sheet.getLastRow(), sheet.getLastColumn())
-    .clearContent();
+  if (sheet.getLastRow() >= startRow) {
+    sheet
+      .getRange(startRow, 1, sheet.getLastRow() - startRow + 1, Math.max(1, sheet.getLastColumn()))
+      .clearContent();
+  }
   if (logArray.length === 1) {
     sheet.getRange("A2").setValue("No data found");
     return;
@@ -763,9 +785,12 @@ function writeToSheet(SETTINGS, logArray, sheetName) {
           .getValues()[0]
           .indexOf("Cost")
       ) + 1;
-    sheet
-      .getRange(startRow, 1, sheet.getLastRow(), sheet.getLastColumn())
-      .sort({ column: costColumnNumber, ascending: false });
+    //sort the data rows only, not the header row
+    if (costColumnNumber > 0 && sheet.getLastRow() > startRow) {
+      sheet
+        .getRange(startRow + 1, 1, sheet.getLastRow() - startRow, sheet.getLastColumn())
+        .sort({ column: costColumnNumber, ascending: false });
+    }
   }
   //   sheet.getRange(1,2,sheet.getLastRow(),sheet.getLastColumn()).setNumberFormat("0.00")
   //   sheet.getRange(1,13,sheet.getLastRow(),sheet.getLastColumn()).setNumberFormat("0.00%")
@@ -817,10 +842,10 @@ class SheetFilter {
 
   getFilterRange() {
     const reportSheet = this.spreadsheet.getSheetByName(this.sheetName);
-    if (reportSheet.getLastRow() < 2) {
+    if (reportSheet.getLastRow() < 3) {
       return;
     }
-    const rangeValues = [3, 1, reportSheet.getLastRow(), reportSheet.getLastColumn()];
+    const rangeValues = [3, 1, reportSheet.getLastRow() - 2, reportSheet.getLastColumn()];
     const filterRange = reportSheet.getRange(...rangeValues);
     return filterRange;
   }
@@ -966,7 +991,7 @@ function scanForAccounts() {
     let sheetRowNumber = rowIndex + 4;
     let row = data[rowIndex];
 
-    if (String(row[0]) == "" || row[flagPosition].toLowerCase() != "yes") {
+    if (String(row[0]) == "" || String(row[flagPosition]).toLowerCase() != "yes") {
       continue;
     }
     let id = String(rowIndex);
@@ -1089,7 +1114,7 @@ function processSetting(
     case "bool":
       return value == "Yes" ? true : false;
     case "csv":
-      let ret = value.split(",");
+      let ret = String(value).split(",");
       ret = ret[0] == "" && ret.length == 1 ? [] : ret;
       if (ret.length == 0) {
         return [];
@@ -1182,7 +1207,7 @@ function createSheetIfNotExists(sheetName) {
  **/
 function checkSettings(SETTINGS) {
   //check the settings here
-  if (SETTINGS.N === "") {
+  if (SETTINGS.N === "" || typeof SETTINGS.N === "undefined") {
     log(JSON.stringify(SETTINGS));
     updateControlSheet(
       "Please set a lookback window. Note: Ensure the NUMBER_OF_FILTERS number is correct",

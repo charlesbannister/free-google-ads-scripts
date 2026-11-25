@@ -1,7 +1,7 @@
 /**
  * Negative Keyword Finder
  * @Author Charles Bannister (shabba.io)
- * @Version 1.3
+ * @Version 1.4
  * View the script at https://shabba.io/script/7
 **/
 
@@ -36,7 +36,7 @@ const SCRIPT_NAME = "Negative Keyword Finder"
 
 const SHABBA_SCRIPT_ID = 7;
 
-const VERSION = "1.3";
+const VERSION = "1.4";
 
 
 
@@ -124,13 +124,13 @@ function getQueriesFromSheet(SETTINGS) {
 
     var query = String(row[header.indexOf("Search Term")]);
 
-    var addToAdGroup = row[header.indexOf("Add as Keyword")];
+    var addToAdGroup = isTicked(row[header.indexOf("Add as Keyword")]);
 
     var match_type = row[header.indexOf("Match Type")];
 
-    var this_is_ok = row[header.indexOf("Ignore")];
+    var this_is_ok = isTicked(row[header.indexOf("Ignore")]);
 
-    var add_as_negative = row[header.indexOf("Add as Ad Group Negative")];
+    var add_as_negative = isTicked(row[header.indexOf("Add as Ad Group Negative")]);
 
     if (!addToAdGroup && !add_as_negative & !this_is_ok) continue;
 
@@ -179,6 +179,15 @@ function getQueriesFromSheet(SETTINGS) {
   }
 
   return map;
+}
+
+/**
+ * Whether a checkbox cell is ticked. The script writes "TRUE"/"FALSE" as text, and the
+ * text "FALSE" must not count as ticked.
+ */
+function isTicked(value) {
+  if (value === true) return true;
+  return String(value).trim().toUpperCase() === "TRUE";
 }
 
 function addLogSheetInfo(SETTINGS) {
@@ -502,7 +511,8 @@ function addQueriesToSheet(SETTINGS) {
   let sheetOperations = new SheetOperations(SETTINGS);
   var sheet = sheetOperations.getSheetByName(SETTINGS["TAB_NAME"]);
   if (sheet.getMaxRows() > 3) {
-    const rangeToClear = sheet.getRange(4, 1, sheet.getMaxRows(), sheet.getMaxColumns());
+    // Rows 4 to the last row (the old range ran 3 rows past the end of the sheet).
+    const rangeToClear = sheet.getRange(4, 1, sheet.getMaxRows() - 3, sheet.getMaxColumns());
     rangeToClear.clear();
   }
 
@@ -735,8 +745,11 @@ class SheetOperations {
 
   getAllRowsData(sheet, start_row, num_columns) {
     var start_column = 1;
+    // Only the rows that exist (the old range ran past the end of the sheet).
+    var numRows = sheet.getLastRow() - start_row + 1;
+    if (numRows < 1) return [];
     return sheet
-      .getRange(start_row, start_column, sheet.getLastRow(), num_columns)
+      .getRange(start_row, start_column, numRows, num_columns)
       .getValues();
   }
 
@@ -749,6 +762,11 @@ class SheetOperations {
     // log("lastRow: " +  lastRow)
     if (lastRow < parseInt(logArray.length) + 20) {
       sheet.insertRowsAfter(lastRow, lastRow);
+    }
+    // Make sure every row fits: rows 4 to 3 + logArray.length.
+    var rowsNeeded = 3 + logArray.length;
+    if (sheet.getMaxRows() < rowsNeeded) {
+      sheet.insertRowsAfter(sheet.getMaxRows(), rowsNeeded - sheet.getMaxRows());
     }
     log("writing to sheet");
     sheet
@@ -789,7 +807,8 @@ class SheetOperations {
 
   sortColumn(sheet, columnNumber) {
     const startRow = 4;
-    const numberOfRows = sheet.getLastRow() - startRow
+    // Rows 4 to the last row inclusive (the last row used to be left out of the sort).
+    const numberOfRows = sheet.getLastRow() - startRow + 1
     if (numberOfRows < 2) {
       return
     }
@@ -963,8 +982,20 @@ function addKeywords(SETTINGS, queries) {
           }
 
           if (row["add_as_negative"]) {
-            const keyword = addMatchType(query, row["match_type"]);
-            adGroup.createNegativeKeyword(keyword);
+            // One refused keyword (bad match type, over 10 words or 80 characters...) must not
+            // stop the run: the ones already added would not be logged and would be sent again.
+            try {
+              const keyword = addMatchType(query, row["match_type"]);
+              adGroup.createNegativeKeyword(keyword);
+            } catch (e) {
+              console.error(`Could not add negative '${query}' to ad group ${row["adGroupName"]}: ${e && e.message ? e.message : e}`);
+              SETTINGS.LOGS.push(`Could not add negative '${query}': ${e && e.message ? e.message : e}`);
+              continue;
+            }
+            // In preview nothing is added, so nothing is logged (a logged term is hidden from later reports).
+            if (SETTINGS.PREVIEW_MODE) {
+              continue;
+            }
             const logRow = [
               row["campaignName"],
               row["adGroupName"],
@@ -977,12 +1008,25 @@ function addKeywords(SETTINGS, queries) {
             continue;
           }
           if (row["add_to_adgroup"]) {
-            const keyword = addMatchType(query, row["match_type"]);
-            adGroup
-              .newKeywordBuilder()
-              .withText(keyword)
-              .withCpc(row["cost"] / row["clicks"])
-              .build();
+            try {
+              if (typeof adGroup.newKeywordBuilder !== "function") {
+                throw new Error("keywords cannot be added to this type of ad group");
+              }
+              const keyword = addMatchType(query, row["match_type"]);
+              let builder = adGroup.newKeywordBuilder().withText(keyword);
+              // No clicks or no cost means no average CPC: use the ad group's default bid.
+              const cpc = parseFloat(row["cost"]) / parseFloat(row["clicks"]);
+              if (isFinite(cpc) && cpc > 0) {
+                builder = builder.withCpc(cpc);
+              }
+              const operation = builder.build();
+              if (operation && typeof operation.isSuccessful === "function" && !operation.isSuccessful()) {
+                console.error(`Could not add keyword '${query}': ${operation.getErrors().join("; ")}`);
+              }
+            } catch (e) {
+              console.error(`Could not add keyword '${query}' to ad group ${row["adGroupName"]}: ${e && e.message ? e.message : e}`);
+              SETTINGS.LOGS.push(`Could not add keyword '${query}': ${e && e.message ? e.message : e}`);
+            }
           }
         }
       }
@@ -1245,7 +1289,7 @@ function scanForAccounts() {
       console.log(`Rule name is empty for row ${rowNum}. Skipping...`);
       continue;
     }
-    if (row[flagIndex].toLowerCase() != "yes") {
+    if (String(row[flagIndex]).toLowerCase() != "yes") {
       console.log(`Flag set to ${row[flagIndex]} for row ${rowNum}. Skipping...`);
       continue;
     }
@@ -1377,7 +1421,7 @@ function processSetting(
       return value == "Yes" ? true : false;
       break;
     case "csv":
-      var ret = value.split(",");
+      var ret = String(value === null || value === undefined ? "" : value).split(",");
       ret = ret[0] == "" && ret.length == 1 ? [] : ret;
       if (ret.length == 0) {
         return [];
@@ -1560,7 +1604,7 @@ function runTopLevelLogic() {
   if (isMCC()) {
     var SETTINGS = scanForAccounts();
     log(JSON.stringify(SETTINGS))
-    var ids = Object.keys(SETTINGS);
+    var ids = Object.keys(SETTINGS || {}); // scanForAccounts returns nothing when no rule is on
     if (ids.length == 0) {
       Logger.log("No Rules Specified");
       return;
@@ -1575,11 +1619,33 @@ function runTopLevelLogic() {
     log(JSON.stringify(ALL_SETTINGS))
 
     //run all rows and all accounts
+    var failedRows = [];
     for (var S in ALL_SETTINGS) {
       for (var R in ALL_SETTINGS[S]) {
-        runScript(ALL_SETTINGS[S][R]);
+        runRowSafely(ALL_SETTINGS[S][R], R, failedRows);
       }
     }
+    throwIfRowsFailed(failedRows);
+  }
+}
+
+/**
+ * Runs one rule row. One row's error no longer stops the other rows; its Logs cell keeps
+ * the "didn't finish successfully" message and the error is reported at the end.
+ */
+function runRowSafely(SETTINGS, rowId, failedRows) {
+  try {
+    runScript(SETTINGS);
+  } catch (e) {
+    var message = e && e.message ? e.message : String(e);
+    console.error("Rule " + rowId + " failed: " + message);
+    failedRows.push(rowId + ": " + message);
+  }
+}
+
+function throwIfRowsFailed(failedRows) {
+  if (failedRows.length > 0) {
+    throw new Error(failedRows.length + " rule(s) failed. " + failedRows.join(" | "));
   }
 }
 
@@ -1600,9 +1666,11 @@ function runRows(INPUT) {
   log("running rows");
   var SETTINGS =
     JSON.parse(INPUT)[AdsApp.currentAccount().getCustomerId().toString()];
+  var failedRows = [];
   for (var rowId in SETTINGS) {
-    runScript(SETTINGS[rowId]);
+    runRowSafely(SETTINGS[rowId], rowId, failedRows);
   }
+  throwIfRowsFailed(failedRows);
 }
 
 function Helper() {

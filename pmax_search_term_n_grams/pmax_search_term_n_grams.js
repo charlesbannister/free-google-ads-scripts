@@ -7,7 +7,7 @@
 //You may also be interested in this Chrome keyword wrapper!
 //https://chrome.google.com/webstore/detail/keyword-wrapper/paaonoglkfolneaaopehamdadalgehbb
 
-const VERSION = 2;
+const VERSION = 3;
 
 // START OF OPTIONS
 
@@ -90,6 +90,10 @@ function main() {
     }
     if (!isMCC()) {
         runAccount();
+        return;
+    }
+    if (!ACCOUNT_ID) {
+        console.log('ERROR: This is a manager (MCC) account. Set ACCOUNT_ID to the ID (000-000-0000) of the account to run.');
         return;
     }
     MccApp.accounts()
@@ -268,16 +272,19 @@ function writeToSheet(sheet, pmaxRows, startRow = 1) {
     const dataRange = sheet.getRange(startRow, 1, numRows, numCols);
     dataRange.setValues(formattedData);
 
-    const sortByColumns = [];
-    sortByColumns.push({ column: 7, ascending: false });
-    sheet.getRange(startRow, 1, numRows, numCols).sort(sortByColumns);
+    // Sort the data rows only, so the header stays on row 1
+    if (numRows > 1) {
+        const sortByColumns = [];
+        sortByColumns.push({ column: 7, ascending: false });
+        sheet.getRange(startRow + 1, 1, numRows - 1, numCols).sort(sortByColumns);
+    }
 
     sheet.setFrozenRows(1);
     sheet.setFrozenColumns(1);
 
     var currencyFormat = CURRENCY_SYMBOL + "#,##0.00";
 
-    const formatting = ["#,##0", "#,##0", "#,##0", "#,##0", "#,##0", "#,##0", "#,##0", currencyFormat, "0.00%"];
+    const formatting = ["#,##0", "#,##0", "0", "#,##0", "#,##0", "#,##0", "#,##0", currencyFormat, "0.00%"];
     const validFormatting = formatting.length === headers.length;
     if (!validFormatting) {
         console.error("Formatting array length does not match headers length");
@@ -379,7 +386,8 @@ class PMaxReportBuilder {
         try {
             // Build a query to get all PMAX campaign IDs
             const dateCondition = _getDateRangeCondition_(this.lookbackDays);
-            const statusConditions = ['campaign.status = ENABLED'];
+            // Status comes from entityConditions (ENABLED_CAMPAIGNS_ONLY)
+            const statusConditions = [];
 
             // Extract campaign-specific conditions
             const campaignConditions = [];
@@ -456,7 +464,17 @@ class PMaxReportBuilder {
                 }
 
 
-                // Build query to get PMAX search terms for this campaign
+                // Real PMax search terms (campaign_search_term_view) first;
+                // the search term categories are the fallback.
+                const terms = this._getCampaignSearchTerms(campaign, dateCondition, performanceConditions);
+                if (terms && terms.length > 0) {
+                    console.log(`Retrieved ${terms.length} search terms for PMAX campaign ${campaignId} (${campaignName})`);
+                    allSearchTerms.push(...terms);
+                    continue;
+                }
+                console.log(`No search terms from campaign_search_term_view for campaign ${campaignId}; using search term categories`);
+
+                // Build query to get PMAX search term categories for this campaign
                 // Note: campaign_search_term_insight only supports specific metrics
                 const query = `
                     SELECT
@@ -481,7 +499,7 @@ class PMaxReportBuilder {
                     const row = rows.next();
                     termCount++;
 
-                    if (row['campaign_search_term_insight.category_label'].trim() === '') {
+                    if (String(row['campaign_search_term_insight.category_label'] || '').trim() === '') {
                         continue;
                     }
 
@@ -514,6 +532,55 @@ class PMaxReportBuilder {
         }
 
         return allSearchTerms;
+    }
+
+    /**
+     * Real Performance Max search terms for one campaign, added up over the date range.
+     * @return {Array<Object>|null} Rows, or null if the report failed.
+     */
+    _getCampaignSearchTerms(campaign, dateCondition, performanceConditions) {
+        const conditions = [
+            dateCondition,
+            `campaign.id = ${campaign.id}`,
+            "campaign.advertising_channel_type = 'PERFORMANCE_MAX'",
+            ...performanceConditions
+        ];
+        const query = `
+            SELECT
+                campaign_search_term_view.search_term,
+                metrics.clicks,
+                metrics.impressions,
+                metrics.conversions,
+                metrics.conversions_value
+            FROM campaign_search_term_view
+            WHERE ${conditions.join(' AND ')}
+        `;
+        try {
+            console.log(`Executing PMAX search term view query for campaign ${campaign.id}: ${query}`);
+            const rows = AdsApp.report(query).rows();
+            const terms = [];
+            while (rows.hasNext()) {
+                const row = rows.next();
+                const term = String(row['campaign_search_term_view.search_term'] || '');
+                if (term.trim() === '') {
+                    continue;
+                }
+                terms.push({
+                    searchTerm: term,
+                    campaignId: campaign.id,
+                    campaignName: campaign.name,
+                    impressions: parseInt(row['metrics.impressions'] || 0),
+                    clicks: parseInt(row['metrics.clicks'] || 0),
+                    conversions: parseFloat(row['metrics.conversions'] || 0),
+                    conversions_value: parseFloat(row['metrics.conversions_value'] || 0),
+                    isPmax: true
+                });
+            }
+            return terms;
+        } catch (e) {
+            console.log(`campaign_search_term_view failed for campaign ${campaign.id}: ${e.message}`);
+            return null;
+        }
     }
 }
 
@@ -590,7 +657,8 @@ function normaliseLikeString(string) {
  */
 function _getDateRangeCondition_(lookbackDays) {
     const endDate = getFormattedDateString_(0); // Today
-    const startDate = getFormattedDateString_(lookbackDays);
+    // LOOKBACK_DAYS includes today, so 30 is today and the 29 days before
+    const startDate = getFormattedDateString_(Math.max(lookbackDays - 1, 0));
     return `segments.date BETWEEN '${startDate}' AND '${endDate}'`;
 }
 
@@ -601,10 +669,14 @@ function _getDateRangeCondition_(lookbackDays) {
  * @returns {Array<string>} Array of n-grams
  */
 function extractNgramsFromTerm(searchTerm, n) {
-    const words = searchTerm.toLowerCase().trim().split(/\s+/);
+    const words = String(searchTerm).toLowerCase().trim().split(/\s+/).filter(word => word !== '');
     const ngrams = [];
     for (let i = 0; i <= words.length - n; i++) {
-        ngrams.push(words.slice(i, i + n).join(' '));
+        const ngram = words.slice(i, i + n).join(' ');
+        // Count a term once per nGram, even if the nGram repeats in it
+        if (ngrams.indexOf(ngram) === -1) {
+            ngrams.push(ngram);
+        }
     }
     return ngrams;
 }

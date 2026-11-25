@@ -48,3 +48,7 @@ Once you've got the URL, add it to the top of the script by editing the `SLACK_T
 ## What if I have suggestions?
 
 Please let me know! Hearing your pain points is the number one way I can make improvements.
+
+## Changelog
+
+- **1.2.1** (2026-11-25): Fixes. A campaign, ad group or label that drops to zero (no data at all in the current period) now raises an alert, including when the whole account stops. Dates use the account's time zone. In a single account, the rows whose Account ID matches the account now run (before, only the first Account ID's rows ran). "yes" in lower case works for the Yes/No settings, and a checkbox no longer stops the script.

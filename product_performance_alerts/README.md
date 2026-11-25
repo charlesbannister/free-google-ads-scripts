@@ -48,3 +48,7 @@ You set your own rules using custom filters (clicks, conversions, ROAS, Ctr, etc
 ## What if I have suggestions?
 
 Please let me know! Hearing your pain points is the number one way I can make improvements.
+
+## Changelog
+
+- **1.0.1** (2026-11-25): Fixes. The lookback now includes yesterday and the first day (both were left out). A Cost filter no longer breaks the report. When no products match, last run's results are cleared and "No data found" is shown, and no email is sent. The output tab no longer gains extra rows on every run. Filters containing an apostrophe (for example Men's) work. A number in a list setting (for example an item ID), or "yes" in lower case, no longer stops the script. A blank lookback window is reported on the settings row.
