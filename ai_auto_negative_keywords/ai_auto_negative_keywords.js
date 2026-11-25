@@ -728,7 +728,9 @@ function _processReportRows_(params) {
     TEST_MODE: "No (TEST_MODE enabled)",
     PMAX_NOT_SUPPORTED: "PMAX not supported",
     PMAX_CATEGORY: "No (PMax category, not a search term)",
-    PMAX_AUTO_APPLY_OFF: "No (PMAX_AUTO_APPLY is false)"
+    PMAX_AUTO_APPLY_OFF: "No (PMAX_AUTO_APPLY is false)",
+    PMAX_ALREADY_NEGATIVE: "No (already a negative)",
+    PMAX_TOO_LONG: "No (over 10 words or 80 characters)"
   };
 
   result.negativesByAdGroup = {};
@@ -1212,7 +1214,9 @@ function determineNegativeStatus_(params) {
     if (!params.row || !params.row.isExactTerm) {
       return params.row && params.row.isCategory ? params.STATUS.PMAX_CATEGORY : params.STATUS.PMAX_NOT_SUPPORTED;
     }
-    return params.STATUS.PMAX_AUTO_APPLY_OFF;
+    if (!PMAX_AUTO_APPLY) return params.STATUS.PMAX_AUTO_APPLY_OFF;
+    if (params.row.alreadyNegative) return params.STATUS.PMAX_ALREADY_NEGATIVE;
+    return params.STATUS.PMAX_TOO_LONG;
   }
 
   if (!params.autoApply) {
@@ -1638,13 +1642,56 @@ function _applyNegativeKeywords_(ruleName, ruleLevel, negativesByAdGroup, negati
 }
 
 /**
+ * Marks Performance Max rows whose term is already an exact negative on its campaign,
+ * so each run does not try to add (and report) the same negative again.
+ * A failed lookup leaves the rows unmarked; Google then refuses duplicates one by one.
+ * @param {Array<Object>} pmaxRows Rows from PMaxReportBuilder.
+ */
+function _markExistingPmaxNegatives_(pmaxRows) {
+  const exactRows = (pmaxRows || []).filter(row => row.isExactTerm);
+  if (exactRows.length === 0) return;
+  const campaignIds = Array.from(new Set(exactRows.map(row => String(row.campaignId))));
+  const existing = {};
+  try {
+    const query = `SELECT campaign.id, campaign_criterion.keyword.text, campaign_criterion.keyword.match_type
+      FROM campaign_criterion
+      WHERE campaign_criterion.negative = TRUE
+      AND campaign_criterion.type = KEYWORD
+      AND campaign.id IN (${campaignIds.join(', ')})`;
+    const rows = AdsApp.report(query).rows();
+    while (rows.hasNext()) {
+      const row = rows.next();
+      if (String(row['campaign_criterion.keyword.match_type']) !== NEGATIVE_MATCH_TYPE) continue;
+      existing[`${row['campaign.id']}|${String(row['campaign_criterion.keyword.text'] || '').trim().toLowerCase()}`] = true;
+    }
+  } catch (e) {
+    console.log(`Could not read existing Performance Max negatives (${e.message}). Continuing.`);
+    return;
+  }
+  for (const row of exactRows) {
+    if (existing[`${row.campaignId}|${String(row.searchTerm).trim().toLowerCase()}`]) row.alreadyNegative = true;
+  }
+}
+
+/**
+ * Google Ads keyword limits: 80 characters and 10 words.
+ * @param {string} text
+ * @return {boolean}
+ */
+function _isValidNegativeText_(text) {
+  const trimmed = String(text || '').trim();
+  return trimmed.length > 0 && trimmed.length <= 80 && trimmed.split(/\s+/).length <= 10;
+}
+
+/**
  * True when a Performance Max row is a real search term that may be negated.
  * Rows from campaign_search_term_insight are categories and are never negated.
  * @param {Object} row A PMAX row from PMaxReportBuilder.
  * @return {boolean}
  */
 function _canNegatePmaxRow_(row) {
-  return PMAX_AUTO_APPLY && !!row && row.isExactTerm === true;
+  return PMAX_AUTO_APPLY && !!row && row.isExactTerm === true && !row.alreadyNegative &&
+    _isValidNegativeText_(row.searchTerm);
 }
 
 /**
@@ -1658,27 +1705,38 @@ function addPmaxCampaignNegativeKeywords(campaignId, terms) {
   if (!campaignId || !terms || terms.length === 0) return;
   const customerId = String(AdsApp.currentAccount().getCustomerId()).replace(/-/g, '');
   console.log(`\nAdding ${terms.length} exact match negatives to Performance Max campaign ID: ${campaignId}`);
+  const texts = Array.from(new Set(terms.map(term => String(term || '').trim()).filter(_isValidNegativeText_)));
+  const operations = texts.map(text => ({
+    campaignCriterionOperation: {
+      create: {
+        campaign: `customers/${customerId}/campaigns/${campaignId}`,
+        negative: true,
+        keyword: { text: text, matchType: NEGATIVE_MATCH_TYPE }
+      }
+    }
+  }));
   let added = 0;
-  for (const term of terms) {
-    const text = String(term || '').trim();
-    if (!text) continue;
+  const report = (text, result) => {
+    if (result && typeof result.isSuccessful === 'function' && !result.isSuccessful()) {
+      const errors = typeof result.getErrorMessages === 'function' ? result.getErrorMessages().join('; ') : 'unknown error';
+      console.error(`  ERROR adding negative "${text}" to Performance Max campaign ${campaignId}: ${errors}`);
+    } else {
+      added++;
+    }
+  };
+  // mutateAll sends up to 10,000 operations in one request; each result is checked on its own.
+  const BATCH = 1000;
+  for (let start = 0; start < operations.length; start += BATCH) {
+    const batch = operations.slice(start, start + BATCH);
     try {
-      const result = AdsApp.mutate({
-        campaignCriterionOperation: {
-          create: {
-            campaign: `customers/${customerId}/campaigns/${campaignId}`,
-            negative: true,
-            keyword: { text: text, matchType: NEGATIVE_MATCH_TYPE }
-          }
-        }
-      });
-      if (result && typeof result.isSuccessful === 'function' && !result.isSuccessful()) {
-        console.error(`  ERROR adding negative "${text}" to Performance Max campaign ${campaignId}: ${result.getErrorMessages().join('; ')}`);
+      if (typeof AdsApp.mutateAll === 'function') {
+        const results = AdsApp.mutateAll(batch, { partialFailure: true }) || [];
+        batch.forEach((op, i) => report(op.campaignCriterionOperation.create.keyword.text, results[i]));
       } else {
-        added++;
+        batch.forEach(op => report(op.campaignCriterionOperation.create.keyword.text, AdsApp.mutate(op)));
       }
     } catch (e) {
-      console.error(`  ERROR adding negative "${text}" to Performance Max campaign ${campaignId}: ${e}`);
+      console.error(`  ERROR adding ${batch.length} negatives to Performance Max campaign ${campaignId}: ${e}`);
     }
   }
   console.log(`  Submitted ${added} of ${terms.length} negatives to Performance Max campaign ${campaignId}.`);
@@ -3545,6 +3603,13 @@ class PMaxReportBuilder {
         }
       }
 
+      // A rule limited to other channel types never reads Performance Max.
+      const channelConditions = (this.entityConditions || []).filter(c => c && c.field === 'campaign.advertising_channel_type');
+      if (channelConditions.some(c => !_channelConditionAllowsPmax_(c))) {
+        console.log('Rule is limited to other campaign types. Skipping Performance Max.');
+        return [];
+      }
+
       // Always add the PMAX condition
       campaignConditions.push("campaign.advertising_channel_type = 'PERFORMANCE_MAX'");
 
@@ -3701,6 +3766,15 @@ class PMaxReportBuilder {
 }
 
 
+function _channelConditionAllowsPmax_(condition) {
+  const value = String(condition.value || '').toUpperCase();
+  const op = String(condition.operator || '').toLowerCase();
+  const hit = value.includes('PERFORMANCE_MAX');
+  if (op === 'equals' || op === '=' || op === 'contains') return hit;
+  if (op === 'not_contains') return !hit;
+  return true;
+}
+
 /**
  * Normalise a LIKE or NOT LIKE string so that it works with the LIKE operator
  * From the docs:
@@ -3810,6 +3884,7 @@ function _fetchPmaxData_(ruleName, lookbackDays, entityConditions, maxSearchTerm
 
       // Get search terms for the matching campaigns
       pmaxRows = pmaxReportBuilder.getPmaxSearchTerms(matchingCampaigns, maxSearchTerms);
+      _markExistingPmaxNegatives_(pmaxRows);
 
       if (pmaxRows && pmaxRows.length > 0) {
         console.log(`Found ${pmaxRows.length} PMAX search terms for rule "${ruleName}".`);
