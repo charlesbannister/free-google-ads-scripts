@@ -4,7 +4,7 @@ const { join } = require('node:path');
 const { test } = require('node:test');
 const { runInNewContext } = require('node:vm');
 
-const rulesUrl = 'https://autoneg.shabba.io/api/rules?sheetId=demo-sheet&scriptVersion=16';
+const rulesUrl = 'https://autoneg.shabba.io/api/rules?sheetId=demo-sheet&scriptVersion=17';
 const examplesUrl = 'https://autoneg.shabba.io/api/example-terms?sheetId=demo-sheet&ruleId=101';
 const script = readFileSync(join(__dirname, 'ai_auto_negative_keywords.js'), 'utf8')
   .replace('YOUR_SPREADSHEET_URL_HERE', 'https://docs.google.com/spreadsheets/d/demo-sheet/edit');
@@ -13,7 +13,7 @@ function makeRuntime(dependencies) {
   const logs = [];
   return {
     logs,
-    script: runInNewContext(script + '\n({ runAccount, processRule_, _processReportRows_, SCRIPT_VERSION });', {
+    script: runInNewContext(script + '\n({ runAccount, processRule_, _processReportRows_, _applyNegativeKeywords_, PMaxReportBuilder, SCRIPT_VERSION });', {
       console: {
         log: message => logs.push(message),
         warn: message => logs.push(message),
@@ -120,8 +120,8 @@ function reportRuntime(items, fetch) {
   return { tables, runtime, spreadsheet: reportSheet(tables) };
 }
 
-test('v16 advertises an update to v15 installs', () => {
-  assert.equal(makeRuntime({}).script.SCRIPT_VERSION, 16);
+test('v17 advertises an update to v16 installs', () => {
+  assert.equal(makeRuntime({}).script.SCRIPT_VERSION, 17);
 });
 
 test('failed rule fetch exits before opening the spreadsheet', () => {
@@ -299,7 +299,7 @@ test('campaign keyword protection runs once per account and skips Performance Ma
   runtime.runAccount();
   assert.equal(queries.filter(query => query.includes('FROM keyword_view')).length, 1);
   assert.equal(queries.filter(query => query.includes('FROM search_term_view')).length, 2);
-  assert.ok(queries.every(query => !query.includes('campaign_search_term_insight')));
+  assert.ok(queries.every(query => !query.includes('campaign_search_term_insight') && !query.includes('campaign_search_term_view')));
   assert.deepEqual(Array.from(tables[0].slice(1), row => row[0]), ['unrelated job']);
 });
 
@@ -362,4 +362,87 @@ test('keyword protection applies to example terms too', () => {
   });
   runtime.processRule_(keywordRule('adgroup', { include_examples: true }), spreadsheet);
   assert.deepEqual(Array.from(tables[0].slice(1), row => row[0]), ['unrelated job', 'another example']);
+});
+
+function pmaxTerm(overrides = {}) {
+  return {
+    searchTerm: 'free pmax term', campaignId: '500', campaignName: 'PMax', isPmax: true, isExactTerm: true,
+    impressions: 10, clicks: 2, cost: 5, conversions: 0, conversions_value: 0,
+    'metrics.impressions': 10, 'metrics.clicks': 2, 'metrics.cost_micros': 5000000,
+    'metrics.conversions': 0, 'metrics.conversions_value': 0,
+    ...overrides,
+  };
+}
+
+function pmaxProcess(runtime, overrides) {
+  return runtime._processReportRows_({
+    regularRows: rows([]), ruleLevel: 'campaign', autoApply: true, generateReport: true,
+    performanceConditions: [], textConditions: null, pmaxRows: [pmaxTerm()],
+    rule: rule({ level: 'campaign' }), exampleTerms: [], ...overrides,
+  });
+}
+
+test('real Performance Max search terms are collected for campaign negatives', () => {
+  const { script: runtime } = makeRuntime({ AdsApp: { getExecutionInfo: () => ({ isPreview: () => false }) } });
+  const result = pmaxProcess(runtime);
+  assert.deepEqual(Array.from(result.negativesByCampaign['500'].terms), ['free pmax term']);
+  assert.equal(result.negativesByCampaign['500'].pmax, true);
+  assert.ok(result.outputDataRows[0].includes('Yes'));
+});
+
+test('Performance Max categories stay report-only', () => {
+  const { script: runtime } = makeRuntime({ AdsApp: { getExecutionInfo: () => ({ isPreview: () => false }) } });
+  const result = pmaxProcess(runtime, { pmaxRows: [{ searchTerm: 'shoes', campaignId: '500', campaignName: 'PMax', isPmax: true, isCategory: true }] });
+  assert.equal(Object.keys(result.negativesByCampaign).length, 0);
+  assert.ok(result.outputDataRows[0].includes('No (PMax category, not a search term)'));
+});
+
+test('performance conditions filter real Performance Max terms', () => {
+  const { script: runtime } = makeRuntime({ AdsApp: { getExecutionInfo: () => ({ isPreview: () => false }) } });
+  const result = pmaxProcess(runtime, { performanceConditions: [{ metric: 'cost', operator: '>', value: '50' }] });
+  assert.equal(result.outputDataRows.length, 0);
+  assert.equal(Object.keys(result.negativesByCampaign).length, 0);
+});
+
+test('account rules send real Performance Max terms to the account list', () => {
+  const { script: runtime } = makeRuntime({ AdsApp: { getExecutionInfo: () => ({ isPreview: () => false }) } });
+  const result = pmaxProcess(runtime, { ruleLevel: 'account', rule: rule() });
+  assert.deepEqual(Array.from(result.negativesByAccount.terms), ['free pmax term']);
+});
+
+test('Performance Max campaign negatives go through AdsApp.mutate, other campaigns unchanged', () => {
+  const mutations = [];
+  const { script: runtime } = makeRuntime({
+    AdsApp: {
+      getExecutionInfo: () => ({ isPreview: () => false }),
+      currentAccount: () => ({ getCustomerId: () => '123-456-7890' }),
+      mutate: operation => { mutations.push(operation); return { isSuccessful: () => true }; },
+    },
+  });
+  runtime._applyNegativeKeywords_('r', 'campaign', {}, { '500': { terms: ['free pmax term'], pmax: true } }, {}, '');
+  assert.equal(mutations.length, 1);
+  const create = mutations[0].campaignCriterionOperation.create;
+  assert.equal(create.campaign, 'customers/1234567890/campaigns/500');
+  assert.equal(create.negative, true);
+  assert.equal(create.keyword.text, 'free pmax term');
+  assert.equal(create.keyword.matchType, 'EXACT');
+});
+
+test('PMax report falls back to categories when the search terms view fails', () => {
+  const queries = [];
+  const { script: runtime } = makeRuntime({
+    AdsApp: {
+      report: query => {
+        queries.push(query);
+        if (query.includes('campaign_search_term_view')) throw new Error('unsupported');
+        return { rows: () => rows([{ 'campaign_search_term_insight.category_label': 'shoes', 'metrics.clicks': 1, 'metrics.impressions': 3 }]) };
+      },
+    },
+  });
+  const builder = new runtime.PMaxReportBuilder(30, []);
+  const terms = builder.getPmaxSearchTerms([{ id: '500', name: 'PMax' }], null);
+  assert.equal(terms.length, 1);
+  assert.equal(terms[0].isCategory, true);
+  assert.notEqual(terms[0].isExactTerm, true);
+  assert.equal(queries.length, 2);
 });

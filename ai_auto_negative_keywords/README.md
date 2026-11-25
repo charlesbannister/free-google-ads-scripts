@@ -17,6 +17,15 @@ This script supports Dynamic Search Ads (DSAs), Shopping Ads, Performance Max, a
 - **Comprehensive Reporting**: Track results across different lookback windows with detailed KPIs
 - **Perfect for Brand Campaigns**: Stricter matching control for brand protection
 
+## Version 17
+
+Performance Max search terms can now be negated. The script reads real Performance Max search terms (with cost) from Google's Performance Max search terms report, applies the rule's text, AI and performance conditions to them, and, when auto-apply is on, adds matches as exact negatives:
+
+- **Campaign rules:** to the Performance Max campaign itself, or to the selected negative keyword list. A list only blocks terms in the campaigns it is applied to, so apply the list to your Performance Max campaigns.
+- **Account rules:** to the selected negative keyword list.
+
+If Google's search terms report is not available, the script falls back to the search term categories used in version 16. Categories are reported only and never negated. Set `PMAX_AUTO_APPLY = false` at the top of the script to keep all Performance Max terms report-only.
+
 ## Version 16
 
 Use **Protect keywords** on a campaign or ad-group rule to keep search terms close to an enabled keyword. You can use it alongside **Custom words**. The script reads keywords once per account run. It skips terms it cannot compare, including Performance Max terms, and keeps scoped keyword protection report-only when a shared negative list is selected.

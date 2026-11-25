@@ -9,7 +9,13 @@
 // --- Configuration ---
 // <<<< PASTE SPREADSHEET URL HERE >>>>
 const SPREADSHEET_URL = "YOUR_SPREADSHEET_URL_HERE";
-const SCRIPT_VERSION = 16;
+const SCRIPT_VERSION = 17;
+
+// Performance Max: when a rule has auto-apply on, matching Performance Max search terms are
+// added as exact negatives (campaign rules: to the Performance Max campaign, or to the
+// selected negative list; account rules: to the selected negative list).
+// Set to false to keep Performance Max terms report-only, as in version 16 and earlier.
+const PMAX_AUTO_APPLY = true;
 
 // <<< /START/ These should all be false >>>
 const DEBUG_MODE = false;
@@ -410,10 +416,10 @@ function processRule_(rule, spreadsheet, globalEmailRecipients = [], getKeywordI
 
   // --- 3b. Try to get PMAX data if this is a campaign-level rule ---
   let pmaxRows = [];
-  if (ruleLevel === 'campaign' && !keywordProtection) {
+  if ((ruleLevel === 'campaign' || ruleLevel === 'account') && !keywordProtection) {
     pmaxRows = _fetchPmaxData_(rule.name, rule.lookback_days, conditions.entityConditions, maxSearchTerms);
   } else if (!keywordProtection) {
-    console.warn(`Rule "${rule.name}" is at ${ruleLevel} level. PMAX search terms will only be fetched for campaign-level rules.`);
+    console.warn(`Rule "${rule.name}" is at ${ruleLevel} level. PMAX search terms are only fetched for campaign and account-level rules.`);
   }
 
   // --- 3c. Get example terms ---
@@ -720,15 +726,17 @@ function _processReportRows_(params) {
     PREVIEWED: "Yes (Previewed)",
     AUTO_APPLY_DISABLED: "No (Auto Apply Disabled)",
     TEST_MODE: "No (TEST_MODE enabled)",
-    PMAX_NOT_SUPPORTED: "PMAX not supported"
+    PMAX_NOT_SUPPORTED: "PMAX not supported",
+    PMAX_CATEGORY: "No (PMax category, not a search term)",
+    PMAX_AUTO_APPLY_OFF: "No (PMAX_AUTO_APPLY is false)"
   };
-
-  // Process PMAX search term rows
-  _processPmaxRows_(pmaxRows, ruleLevel, autoApply, generateReport, textConditions, STATUS, result, rule);
 
   result.negativesByAdGroup = {};
   result.negativesByCampaign = {};
   result.negativesByAccount = {};
+
+  // Process PMAX search term rows
+  _processPmaxRows_(pmaxRows, ruleLevel, autoApply, generateReport, textConditions, STATUS, result, rule, performanceConditions);
 
   // Process regular search term rows
   _processRegularRows_(regularRows, ruleLevel, autoApply, generateReport, performanceConditions, textConditions, STATUS, result, rule, keywordProtection);
@@ -838,8 +846,8 @@ function _processRegularRows_(rows, ruleLevel, autoApply, generateReport, perfor
  * @param {Object} rule The rule object.
  * @private
  */
-function _processPmaxRows_(pmaxRows, ruleLevel, autoApply, generateReport, textConditions, STATUS, result, rule) {
-  if (ruleLevel !== 'campaign') {
+function _processPmaxRows_(pmaxRows, ruleLevel, autoApply, generateReport, textConditions, STATUS, result, rule, performanceConditions) {
+  if (ruleLevel !== 'campaign' && ruleLevel !== 'account') {
     return;
   }
   if (!pmaxRows || pmaxRows.length === 0) {
@@ -866,6 +874,13 @@ function _processPmaxRows_(pmaxRows, ruleLevel, autoApply, generateReport, textC
         continue;
       }
 
+      // Real search terms carry full metrics, so the rule's performance conditions apply.
+      // Categories (version 16 source) have no cost, so they keep the old text-only check.
+      if (pmaxRow.isExactTerm && performanceConditions && performanceConditions.length > 0 &&
+        !checkPerformanceConditions_(pmaxRow, performanceConditions)) {
+        continue;
+      }
+
       // Check conditions for PMAX terms
       if (!_pmaxRowMeetsConditions_(pmaxRow, searchTerm, textConditions, rule, campaignName, null, campaignId, null)) {
         continue;
@@ -881,7 +896,7 @@ function _processPmaxRows_(pmaxRows, ruleLevel, autoApply, generateReport, textC
         adGroupName: null,
         addedRemoved: addedRemoved,
         row: pmaxRow,
-        ruleLevel: 'campaign',
+        ruleLevel: ruleLevel,
         autoApply: autoApply,
         generateReport: generateReport,
         STATUS: STATUS,
@@ -892,7 +907,7 @@ function _processPmaxRows_(pmaxRows, ruleLevel, autoApply, generateReport, textC
         termType: 'PMAX',
         aiResponseString: pmaxRow.aiResponseString
       });
-      // Don't increment negativesCollectedCount for PMAX terms as they can't be negated
+      if (autoApply && _canNegatePmaxRow_(pmaxRow)) result.stats.collectedForNeg++;
     } catch (pmaxTermError) {
       console.log(`Error processing individual PMAX search term: ${pmaxTermError.message}`);
       // Continue with the next PMAX term
@@ -1139,14 +1154,19 @@ function processMatchedTerm_(params) {
     // Determine negative status and collect negatives if auto-apply is enabled
     const negativeStatus = determineNegativeStatus_({
       termType: params.termType,
+      row: params.row,
       autoApply: params.autoApply,
       STATUS: params.STATUS
     });
     debugLog(`Negative status: ${negativeStatus}`);
 
-    // Performance Max terms are reported only.
-    if (params.autoApply && (params.termType === 'STANDARD' || params.termType === 'EXAMPLE')) {
+    // Performance Max terms are negated only when they are real search terms
+    // (campaign_search_term_view), never insight categories.
+    const canCollect = params.termType === 'STANDARD' || params.termType === 'EXAMPLE' ||
+      (params.termType === 'PMAX' && _canNegatePmaxRow_(params.row));
+    if (params.autoApply && canCollect) {
       collectNegativeKeywords_({
+        isPmax: params.termType === 'PMAX',
         searchTerm: params.searchTerm,
         campaignId: params.campaignId,
         adGroupId: params.adGroupId,
@@ -1188,8 +1208,11 @@ function processMatchedTerm_(params) {
  * @private
  */
 function determineNegativeStatus_(params) {
-  if (params.termType === 'PMAX') {
-    return params.STATUS.PMAX_NOT_SUPPORTED;
+  if (params.termType === 'PMAX' && !_canNegatePmaxRow_(params.row)) {
+    if (!params.row || !params.row.isExactTerm) {
+      return params.row && params.row.isCategory ? params.STATUS.PMAX_CATEGORY : params.STATUS.PMAX_NOT_SUPPORTED;
+    }
+    return params.STATUS.PMAX_AUTO_APPLY_OFF;
   }
 
   if (!params.autoApply) {
@@ -1232,6 +1255,7 @@ function collectNegativeKeywords_(params) {
     addToCampaignNegatives_({
       searchTerm: params.searchTerm,
       campaignId: params.campaignId,
+      isPmax: params.isPmax,
       negativesToAddByCampaign: params.negativesToAddByCampaign
     });
   } else if (params.ruleLevel === 'account') {
@@ -1290,6 +1314,7 @@ function addToCampaignNegatives_(params) {
   if (!params.negativesToAddByCampaign[params.campaignId]) {
     params.negativesToAddByCampaign[params.campaignId] = { terms: [] };
   }
+  if (params.isPmax) params.negativesToAddByCampaign[params.campaignId].pmax = true;
   if (!params.negativesToAddByCampaign[params.campaignId].terms.includes(params.searchTerm)) {
     params.negativesToAddByCampaign[params.campaignId].terms.push(params.searchTerm);
   }
@@ -1573,7 +1598,11 @@ function _applyNegativeKeywords_(ruleName, ruleLevel, negativesByAdGroup, negati
       const info = negativesByCampaign[campaignId];
       const termsToAdd = info.terms;
       if (termsToAdd && termsToAdd.length > 0) {
-        addCampaignNegativeKeywords(campaignId, termsToAdd);
+        if (info.pmax) {
+          addPmaxCampaignNegativeKeywords(campaignId, termsToAdd);
+        } else {
+          addCampaignNegativeKeywords(campaignId, termsToAdd);
+        }
         totalKeywordsSubmitted += termsToAdd.length;
       }
     }
@@ -1609,6 +1638,53 @@ function _applyNegativeKeywords_(ruleName, ruleLevel, negativesByAdGroup, negati
 }
 
 /**
+ * True when a Performance Max row is a real search term that may be negated.
+ * Rows from campaign_search_term_insight are categories and are never negated.
+ * @param {Object} row A PMAX row from PMaxReportBuilder.
+ * @return {boolean}
+ */
+function _canNegatePmaxRow_(row) {
+  return PMAX_AUTO_APPLY && !!row && row.isExactTerm === true;
+}
+
+/**
+ * Adds exact negative keywords to a Performance Max campaign through the Google Ads API
+ * (campaign criteria with negative = true). AdsApp.campaigns() does not return
+ * Performance Max campaigns, so the usual createNegativeKeyword route cannot be used.
+ * @param {string} campaignId The Performance Max campaign ID.
+ * @param {Array<string>} terms Search terms to add as negatives.
+ */
+function addPmaxCampaignNegativeKeywords(campaignId, terms) {
+  if (!campaignId || !terms || terms.length === 0) return;
+  const customerId = String(AdsApp.currentAccount().getCustomerId()).replace(/-/g, '');
+  console.log(`\nAdding ${terms.length} exact match negatives to Performance Max campaign ID: ${campaignId}`);
+  let added = 0;
+  for (const term of terms) {
+    const text = String(term || '').trim();
+    if (!text) continue;
+    try {
+      const result = AdsApp.mutate({
+        campaignCriterionOperation: {
+          create: {
+            campaign: `customers/${customerId}/campaigns/${campaignId}`,
+            negative: true,
+            keyword: { text: text, matchType: NEGATIVE_MATCH_TYPE }
+          }
+        }
+      });
+      if (result && typeof result.isSuccessful === 'function' && !result.isSuccessful()) {
+        console.error(`  ERROR adding negative "${text}" to Performance Max campaign ${campaignId}: ${result.getErrorMessages().join('; ')}`);
+      } else {
+        added++;
+      }
+    } catch (e) {
+      console.error(`  ERROR adding negative "${text}" to Performance Max campaign ${campaignId}: ${e}`);
+    }
+  }
+  console.log(`  Submitted ${added} of ${terms.length} negatives to Performance Max campaign ${campaignId}.`);
+}
+
+/**
  * Adds a list of negative keywords to a specific list.
  * @param {Array<string>} termsToAdd An array of search terms to add as negatives.
  * @param {string} negativeListName The name of the negative list to add to.
@@ -1634,6 +1710,7 @@ function addListNegativeKeywords(termsToAdd, negativeListName) {
   console.log("\n");
   //add terms to list
   list.addNegativeKeywords(negativeKeywords);
+  console.log(`Note: list "${negativeListName}" only blocks terms in campaigns it is applied to, including Performance Max campaigns.`);
 }
 
 
@@ -3514,72 +3591,112 @@ class PMaxReportBuilder {
     }
 
     const allSearchTerms = [];
-
-    // Process each campaign one at a time
     for (const campaign of campaigns) {
-      const campaignId = campaign.id;
-      const campaignName = campaign.name;
-      const dateCondition = _getDateRangeCondition_(this.lookbackDays);
-
-      // Build query to get PMAX search terms for this campaign
-      // Note: campaign_search_term_insight only supports specific metrics
-      let query = `
-                    SELECT
-                        campaign_search_term_insight.category_label,
-                        metrics.clicks,
-                        metrics.impressions,
-                        metrics.conversions,
-                        metrics.conversions_value
-                    FROM campaign_search_term_insight
-                    WHERE ${dateCondition}
-                    AND campaign_search_term_insight.campaign_id = '${campaignId}'
-                `;
-
-      // Add LIMIT clause if maxSearchTerms is specified
-      if (maxSearchTerms && !isNaN(maxSearchTerms) && maxSearchTerms > 0) {
-        query += ` LIMIT ${maxSearchTerms}`;
-        console.log(`Applied search terms limit of ${maxSearchTerms} to GAQL query.`);
+      let rows = null;
+      try {
+        rows = this._getExactSearchTerms_(campaign, maxSearchTerms);
+      } catch (e) {
+        console.log(`Performance Max search terms report unavailable for campaign ${campaign.id} (${e.message}). Using search term categories (report only).`);
       }
-
-      console.log(`Executing PMAX search terms query for campaign ${campaignId} (${campaignName})`);
-      const report = AdsApp.report(query);
-      const rows = report.rows();
-
-      let termCount = 0;
-      while (rows.hasNext()) {
-        const row = rows.next();
-        termCount++;
-
-        if (row['campaign_search_term_insight.category_label'].trim() === '') {
-          continue;
+      if (rows === null) {
+        try {
+          rows = this._getSearchTermCategories_(campaign, maxSearchTerms);
+        } catch (e) {
+          console.log(`Error executing PMAX category report for campaign ${campaign.id}: ${e.message}`);
+          rows = [];
         }
-
-        // Log if conversions_value is missing
-        if (typeof row['metrics.conversions_value'] === 'undefined') {
-          console.log(`Warning: PMAX search term "${row['campaign_search_term_insight.category_label']}" is missing conversions_value. Using default of 0.`);
-        }
-
-        // Format data in a way similar to regular search term report
-        // For PMAX, we have to estimate cost since cost_micros isn't available
-        // We'll use 0 for cost since it's not available directly
-        allSearchTerms.push({
-          searchTerm: row['campaign_search_term_insight.category_label'],
-          campaignId: campaignId,
-          campaignName: campaignName,
-          impressions: parseInt(row['metrics.impressions'] || 0),
-          clicks: parseInt(row['metrics.clicks'] || 0),
-          cost: 0, // Cost not available for PMAX search terms
-          conversions: parseFloat(row['metrics.conversions'] || 0),
-          conversions_value: parseFloat(row['metrics.conversions_value'] || 0),
-          isPmax: true
-        });
       }
-
-      console.log(`Retrieved ${termCount} search terms for PMAX campaign ${campaignId} (${campaignName})`);
-
+      console.log(`Retrieved ${rows.length} search terms for PMAX campaign ${campaign.id} (${campaign.name})`);
+      allSearchTerms.push(...rows);
     }
-
     return allSearchTerms;
+  }
+
+  _limitClause_(maxSearchTerms) {
+    return maxSearchTerms && !isNaN(maxSearchTerms) && maxSearchTerms > 0 ? ` LIMIT ${maxSearchTerms}` : '';
+  }
+
+  /**
+   * Real Performance Max search terms, with cost, from campaign_search_term_view.
+   * These can be negated.
+   */
+  _getExactSearchTerms_(campaign, maxSearchTerms) {
+    const query = `
+                SELECT
+                    campaign_search_term_view.search_term,
+                    metrics.impressions,
+                    metrics.clicks,
+                    metrics.cost_micros,
+                    metrics.conversions,
+                    metrics.conversions_value
+                FROM campaign_search_term_view
+                WHERE ${_getDateRangeCondition_(this.lookbackDays)}
+                AND campaign.id = ${campaign.id}
+                ORDER BY metrics.impressions DESC` + this._limitClause_(maxSearchTerms);
+    console.log(`Executing PMAX search terms query for campaign ${campaign.id} (${campaign.name})`);
+    const rows = AdsApp.report(query).rows();
+    const terms = [];
+    while (rows.hasNext()) {
+      const row = rows.next();
+      const term = String(row['campaign_search_term_view.search_term'] || '').trim();
+      if (!term) continue;
+      terms.push({
+        searchTerm: term,
+        campaignId: campaign.id,
+        campaignName: campaign.name,
+        impressions: parseInt(row['metrics.impressions'] || 0),
+        clicks: parseInt(row['metrics.clicks'] || 0),
+        cost: parseFloat(row['metrics.cost_micros'] || 0) / 1000000,
+        conversions: parseFloat(row['metrics.conversions'] || 0),
+        conversions_value: parseFloat(row['metrics.conversions_value'] || 0),
+        isPmax: true,
+        isExactTerm: true,
+        // Raw report keys so the rule's performance conditions can be checked.
+        'metrics.impressions': row['metrics.impressions'] || 0,
+        'metrics.clicks': row['metrics.clicks'] || 0,
+        'metrics.cost_micros': row['metrics.cost_micros'] || 0,
+        'metrics.conversions': row['metrics.conversions'] || 0,
+        'metrics.conversions_value': row['metrics.conversions_value'] || 0
+      });
+    }
+    return terms;
+  }
+
+  /**
+   * Version 16 behaviour: search term categories from campaign_search_term_insight.
+   * Categories are not search terms, so they are reported only.
+   */
+  _getSearchTermCategories_(campaign, maxSearchTerms) {
+    const query = `
+                SELECT
+                    campaign_search_term_insight.category_label,
+                    metrics.clicks,
+                    metrics.impressions,
+                    metrics.conversions,
+                    metrics.conversions_value
+                FROM campaign_search_term_insight
+                WHERE ${_getDateRangeCondition_(this.lookbackDays)}
+                AND campaign_search_term_insight.campaign_id = '${campaign.id}'` + this._limitClause_(maxSearchTerms);
+    const rows = AdsApp.report(query).rows();
+    const terms = [];
+    while (rows.hasNext()) {
+      const row = rows.next();
+      const label = String(row['campaign_search_term_insight.category_label'] || '').trim();
+      if (!label) continue;
+      terms.push({
+        searchTerm: label,
+        campaignId: campaign.id,
+        campaignName: campaign.name,
+        impressions: parseInt(row['metrics.impressions'] || 0),
+        clicks: parseInt(row['metrics.clicks'] || 0),
+        cost: 0, // Not available for categories
+        conversions: parseFloat(row['metrics.conversions'] || 0),
+        conversions_value: parseFloat(row['metrics.conversions_value'] || 0),
+        isPmax: true,
+        isCategory: true
+      });
+    }
+    return terms;
   }
 }
 
